@@ -1,0 +1,36 @@
+{
+  "name": "silent-sos-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Silent SOS Emergency Web App - Multi-package workspace root",
+  "scripts": {
+    "dev": "concurrently -n \"SERVER,CLIENT\" -c \"blue,magenta\" \"npm run dev:server\" \"npm run dev:client\"",
+    "dev:server": "npm --prefix server run dev",
+    "dev:client": "npm --prefix client run dev",
+    "test": "npm --prefix server test",
+    "test:server": "npm --prefix server test",
+    "db:init": "node database/scripts/init-db.js",
+    "db:migrate": "node database/scripts/migrate.js",
+    "db:seed": "node database/scripts/seed.js",
+    "install:all": "npm install && npm --prefix server install && npm --prefix client install"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "keywords": [
+    "silent-sos",
+    "emergency-app",
+    "safety",
+    "react",
+    "express",
+    "postgis",
+    "postgresql"
+  ],
+  "author": "",
+  "license": "UNLICENSED",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "pg": "^8.23.0"
+  }
+}
