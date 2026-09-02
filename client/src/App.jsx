@@ -1,80 +1,326 @@
 import { useState, useEffect, useCallback } from 'react';
 
 export default function App() {
-  const [healthData, setHealthData] = useState(null);
-  const [status, setStatus] = useState('loading'); // 'loading' | 'connected' | 'unavailable'
-  const [errorMsg, setErrorMsg] = useState('');
-  const [lastChecked, setLastChecked] = useState(null);
+  // Authentication & Session State
+  const [token, setToken] = useState(() => localStorage.getItem('silent_sos_token') || '');
+  const [user, setUser] = useState(null);
+  const [authMode, setAuthMode] = useState('login'); // 'login' | 'register'
+  const [authLoading, setAuthLoading] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [authForm, setAuthForm] = useState({
+    full_name: '',
+    email: '',
+    phone_number: '',
+    password: '',
+  });
 
+  // Emergency Contacts State
+  const [contacts, setContacts] = useState([]);
+  const [contactsLoading, setContactsLoading] = useState(false);
+  const [contactModalOpen, setContactModalOpen] = useState(false);
+  const [editingContact, setEditingContact] = useState(null);
+  const [contactForm, setContactForm] = useState({
+    contact_name: '',
+    contact_phone: '',
+    contact_email: '',
+    priority_order: '',
+  });
+  const [contactFormError, setContactFormError] = useState('');
+  const [contactFormLoading, setContactFormLoading] = useState(false);
+  const [deleteConfirmContact, setDeleteConfirmContact] = useState(null);
+
+  // Global Alert / Feedback State
+  const [alertFeedback, setAlertFeedback] = useState(null);
+
+  // System Diagnostics State
+  const [healthData, setHealthData] = useState(null);
+  const [healthStatus, setHealthStatus] = useState('loading'); // 'loading' | 'connected' | 'unavailable'
+  const [lastChecked, setLastChecked] = useState(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
+
+  const showAlert = (message, type = 'success') => {
+    setAlertFeedback({ message, type });
+    setTimeout(() => setAlertFeedback(null), 4500);
+  };
+
+  // 1. Backend Health Check
   const checkHealth = useCallback(async () => {
-    setStatus('loading');
-    setErrorMsg('');
+    setHealthStatus('loading');
     try {
       const response = await fetch('/api/v1/health', {
-        headers: {
-          'Accept': 'application/json',
-        },
+        headers: { Accept: 'application/json' },
       });
-
-      if (!response.ok) {
-        throw new Error(`HTTP error ${response.status} (${response.statusText})`);
-      }
-
       const data = await response.json();
-      if (data.status === 'ok') {
+      if (response.ok && data.status === 'ok') {
         setHealthData(data);
-        setStatus('connected');
+        setHealthStatus('connected');
       } else {
-        throw new Error(data.message || 'Health status returned non-ok');
+        setHealthData(data);
+        setHealthStatus(data.status === 'degraded' ? 'connected' : 'unavailable');
       }
     } catch (err) {
-      console.error('[Health Check Failed]:', err);
-      setStatus('unavailable');
-      setErrorMsg(err.message || 'Unable to connect to backend server');
+      setHealthStatus('unavailable');
     } finally {
       setLastChecked(new Date().toLocaleTimeString());
     }
   }, []);
 
+  // 2. Fetch Authenticated User Profile (/api/v1/auth/me)
+  const fetchUserProfile = useCallback(async (activeToken) => {
+    if (!activeToken) {
+      setUser(null);
+      return;
+    }
+    try {
+      const res = await fetch('/api/v1/auth/me', {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+          Accept: 'application/json',
+        },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setUser(data.data.user);
+      } else {
+        // Token invalid or expired
+        localStorage.removeItem('silent_sos_token');
+        setToken('');
+        setUser(null);
+      }
+    } catch (err) {
+      console.error('[User fetch error]:', err);
+    }
+  }, []);
+
+  // 3. Fetch Emergency Contacts (/api/v1/contacts)
+  const fetchContacts = useCallback(async (activeToken) => {
+    if (!activeToken) return;
+    setContactsLoading(true);
+    try {
+      const res = await fetch('/api/v1/contacts', {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+          Accept: 'application/json',
+        },
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        setContacts(data.data.contacts || []);
+      } else if (res.status === 401) {
+        localStorage.removeItem('silent_sos_token');
+        setToken('');
+        setUser(null);
+      }
+    } catch (err) {
+      console.error('[Contacts fetch error]:', err);
+    } finally {
+      setContactsLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     checkHealth();
-  }, [checkHealth]);
+    if (token) {
+      fetchUserProfile(token);
+      fetchContacts(token);
+    }
+  }, [checkHealth, fetchUserProfile, fetchContacts, token]);
+
+  // Auth Handlers
+  const handleAuthSubmit = async (e) => {
+    e.preventDefault();
+    setAuthError('');
+    setAuthLoading(true);
+
+    try {
+      const endpoint = authMode === 'register' ? '/api/v1/auth/register' : '/api/v1/auth/login';
+      const body = authMode === 'register'
+        ? {
+            full_name: authForm.full_name,
+            email: authForm.email,
+            phone_number: authForm.phone_number || undefined,
+            password: authForm.password,
+          }
+        : {
+            email: authForm.email,
+            password: authForm.password,
+          };
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.message || (data.errors ? data.errors.join(', ') : 'Authentication failed'));
+      }
+
+      const newToken = data.data.token;
+      const newUser = data.data.user;
+
+      localStorage.setItem('silent_sos_token', newToken);
+      setToken(newToken);
+      setUser(newUser);
+      setAuthForm({ full_name: '', email: '', phone_number: '', password: '' });
+      showAlert(
+        authMode === 'register' ? `Welcome, ${newUser.full_name}! Account created.` : `Welcome back, ${newUser.full_name}!`,
+        'success'
+      );
+      fetchContacts(newToken);
+    } catch (err) {
+      setAuthError(err.message || 'An error occurred during authentication.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  const handleLogout = async () => {
+    try {
+      await fetch('/api/v1/auth/logout', { method: 'POST' });
+    } catch (e) {
+      // Ignore network failure on logout
+    }
+    localStorage.removeItem('silent_sos_token');
+    setToken('');
+    setUser(null);
+    setContacts([]);
+    showAlert('You have been logged out successfully.', 'info');
+  };
+
+  // Contact Modal Handlers
+  const openAddContactModal = () => {
+    setEditingContact(null);
+    setContactForm({
+      contact_name: '',
+      contact_phone: '',
+      contact_email: '',
+      priority_order: String(contacts.length + 1),
+    });
+    setContactFormError('');
+    setContactModalOpen(true);
+  };
+
+  const openEditContactModal = (contact) => {
+    setEditingContact(contact);
+    setContactForm({
+      contact_name: contact.contact_name,
+      contact_phone: contact.contact_phone || '',
+      contact_email: contact.contact_email || '',
+      priority_order: String(contact.priority_order),
+    });
+    setContactFormError('');
+    setContactModalOpen(true);
+  };
+
+  const handleSaveContact = async (e) => {
+    e.preventDefault();
+    setContactFormError('');
+    setContactFormLoading(true);
+
+    try {
+      const isEdit = !!editingContact;
+      const endpoint = isEdit ? `/api/v1/contacts/${editingContact.id}` : '/api/v1/contacts';
+      const method = isEdit ? 'PUT' : 'POST';
+
+      const payload = {
+        contact_name: contactForm.contact_name,
+        contact_phone: contactForm.contact_phone.trim() || null,
+        contact_email: contactForm.contact_email.trim() || null,
+        priority_order: contactForm.priority_order ? parseInt(contactForm.priority_order, 10) : undefined,
+      };
+
+      const res = await fetch(endpoint, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.message || (data.errors ? data.errors.join(', ') : 'Failed to save contact'));
+      }
+
+      setContactModalOpen(false);
+      showAlert(
+        isEdit ? `Updated contact "${payload.contact_name}".` : `Added "${payload.contact_name}" to emergency contacts.`,
+        'success'
+      );
+      fetchContacts(token);
+    } catch (err) {
+      setContactFormError(err.message || 'Error saving emergency contact.');
+    } finally {
+      setContactFormLoading(false);
+    }
+  };
+
+  const handleDeleteContact = async () => {
+    if (!deleteConfirmContact) return;
+
+    try {
+      const res = await fetch(`/api/v1/contacts/${deleteConfirmContact.id}`, {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.message || 'Failed to delete contact');
+      }
+
+      showAlert(`Removed "${deleteConfirmContact.contact_name}" from emergency contacts.`, 'info');
+      setDeleteConfirmContact(null);
+      fetchContacts(token);
+    } catch (err) {
+      showAlert(err.message || 'Error removing contact', 'error');
+    }
+  };
 
   const milestones = [
     {
       step: 'Step 1',
-      name: 'Project Initialization & Baseline Verification',
+      name: 'Project Initialization & Safety Guardrails',
       status: 'Completed',
-      active: false,
-      desc: 'Monorepo scaffolding, React/Vite frontend, Express backend, /api/v1/health, and safety guardrails.',
+      state: 'completed',
+      desc: 'Monorepo scaffolding, React/Vite client, Express baseline, /api/v1/health.',
     },
     {
       step: 'Step 2',
-      name: 'Database & Geospatial Modeling',
-      status: 'Active / Completed',
-      active: true,
-      desc: 'PostgreSQL 18.6 + PostGIS 3.6.2 schemas, migrations (001-007), GiST spatial index, and seeds.',
+      name: 'Database & Geospatial PostGIS Modeling',
+      status: 'Completed',
+      state: 'completed',
+      desc: 'PostgreSQL 18.6 + PostGIS 3.6.2, migrations (001–007), GiST index, seeds.',
     },
     {
       step: 'Step 3',
-      name: 'Secure Authentication & Contacts',
-      status: 'Planned',
-      active: false,
-      desc: 'User management, password hashing, JWT sessions, and trusted contacts directory.',
+      name: 'Secure Authentication & Contacts Management',
+      status: 'Active / Complete',
+      state: 'active',
+      desc: 'Argon2id hashing, minimal JWT { sub }, rate limiting, multi-tenant contact CRUD.',
     },
     {
       step: 'Step 4',
       name: 'Silent SOS Trigger & Location Engine',
       status: 'Planned',
-      active: false,
-      desc: 'Stealth SOS triggers, high-entropy tracking tokens, and geolocation breadcrumbs.',
+      state: 'planned',
+      desc: 'Stealth trigger UI, high-entropy tracking tokens, geolocation capture.',
     },
     {
       step: 'Step 5',
-      name: 'Real-time Gateway & Notifications',
+      name: 'Real-time Gateway & Notification Queues',
       status: 'Planned',
-      active: false,
-      desc: 'Socket.IO live streaming, BullMQ queue, Twilio/SMS & Email alerts, and tracking portal.',
+      state: 'planned',
+      desc: 'Socket.IO live coordinate stream, BullMQ queues, SMS/Email delivery.',
     },
   ];
 
@@ -103,17 +349,33 @@ export default function App() {
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
-          <span className="badge badge-step">Phase: Step 2 Initialized</span>
-          {status === 'connected' && (
+        <div className="header-actions">
+          <span className="badge badge-step">Step 3 Active</span>
+          {healthStatus === 'connected' && (
             <span className="badge badge-connected">
               <span className="status-dot online"></span> API Online
             </span>
           )}
-          {status === 'unavailable' && (
+          {healthStatus === 'unavailable' && (
             <span className="badge badge-unavailable">
               <span className="status-dot offline"></span> API Offline
             </span>
+          )}
+
+          {user && (
+            <div className="user-badge-profile">
+              <div className="user-avatar">
+                {user.full_name ? user.full_name.charAt(0).toUpperCase() : 'U'}
+              </div>
+              <span className="user-badge-name">{user.full_name}</span>
+              <button
+                className="btn btn-outline btn-sm"
+                onClick={handleLogout}
+                title="Logout of session"
+              >
+                Logout
+              </button>
+            </div>
           )}
         </div>
       </header>
@@ -124,13 +386,386 @@ export default function App() {
         <div>
           <h2 className="safety-banner-title">Safety Constraints & Protocol Notice</h2>
           <p className="safety-banner-text">
-            This application is engineered for critical safety situations. It is strictly supplementary and does not replace official emergency services. 
-            Background GPS and instant delivery are subject to device and network limitations.
+            This application is engineered for safety situations. It is strictly supplementary and does not replace official emergency dispatch services (911/112). 
+            Background GPS and notifications are subject to device permissions and telecom carrier delivery constraints.
           </p>
         </div>
       </section>
 
-      {/* Backend Health Check Card */}
+      {/* Global Alert Notification */}
+      {alertFeedback && (
+        <div className={`alert alert-${alertFeedback.type}`}>
+          {alertFeedback.type === 'success' && <span>✓</span>}
+          {alertFeedback.type === 'error' && <span>✗</span>}
+          {alertFeedback.type === 'info' && <span>ℹ</span>}
+          <span>{alertFeedback.message}</span>
+        </div>
+      )}
+
+      {/* Unauthenticated View: Login / Register Form */}
+      {!user ? (
+        <section className="card auth-wrapper">
+          <div className="auth-tabs">
+            <button
+              className={`auth-tab-btn ${authMode === 'login' ? 'active' : ''}`}
+              onClick={() => {
+                setAuthMode('login');
+                setAuthError('');
+              }}
+            >
+              Sign In
+            </button>
+            <button
+              className={`auth-tab-btn ${authMode === 'register' ? 'active' : ''}`}
+              onClick={() => {
+                setAuthMode('register');
+                setAuthError('');
+              }}
+            >
+              Create Account
+            </button>
+          </div>
+
+          {authError && (
+            <div className="alert alert-error">
+              <span>✗</span>
+              <span>{authError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleAuthSubmit}>
+            {authMode === 'register' && (
+              <div className="form-group">
+                <label className="form-label" htmlFor="register-name">Full Name *</label>
+                <input
+                  id="register-name"
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Jane Doe"
+                  value={authForm.full_name}
+                  onChange={(e) => setAuthForm({ ...authForm, full_name: e.target.value })}
+                  required
+                />
+              </div>
+            )}
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="auth-email">Email Address *</label>
+              <input
+                id="auth-email"
+                type="email"
+                className="form-input"
+                placeholder="name@example.com"
+                value={authForm.email}
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                required
+              />
+            </div>
+
+            {authMode === 'register' && (
+              <div className="form-group">
+                <label className="form-label" htmlFor="register-phone">Your Phone Number (Optional)</label>
+                <input
+                  id="register-phone"
+                  type="tel"
+                  className="form-input"
+                  placeholder="+1 (555) 000-0000"
+                  value={authForm.phone_number}
+                  onChange={(e) => setAuthForm({ ...authForm, phone_number: e.target.value })}
+                />
+                <span className="form-hint">Used for recipient SMS sender identification</span>
+              </div>
+            )}
+
+            <div className="form-group">
+              <label className="form-label" htmlFor="auth-password">Password *</label>
+              <input
+                id="auth-password"
+                type="password"
+                className="form-input"
+                placeholder="••••••••••••"
+                value={authForm.password}
+                onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                required
+                minLength={8}
+              />
+              <span className="form-hint">
+                {authMode === 'register' ? 'Minimum 8 characters (Argon2id encrypted)' : 'Enter your account password'}
+              </span>
+            </div>
+
+            <button
+              type="submit"
+              className="btn btn-primary btn-full"
+              disabled={authLoading}
+              style={{ marginTop: '0.75rem' }}
+            >
+              {authLoading
+                ? 'Authenticating...'
+                : authMode === 'register'
+                ? 'Create Secure Account'
+                : 'Sign In to Portal'}
+            </button>
+          </form>
+
+          {/* Dev helper note */}
+          <div style={{ marginTop: '1.5rem', padding: '0.85rem', background: 'rgba(0,0,0,0.25)', borderRadius: 'var(--radius-sm)', border: '1px dashed var(--border-subtle)', fontSize: '0.76rem', color: 'var(--text-secondary)' }}>
+            <strong style={{ color: 'var(--accent-amber)' }}>Development Seed Account:</strong>
+            <br />
+            Email: <code>demo.user@example.local</code>
+            <br />
+            Password: <code>DemoPassword123!</code>
+          </div>
+        </section>
+      ) : (
+        /* Authenticated View: Emergency Contacts Management Dashboard */
+        <section className="card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">
+                <svg
+                  width="22"
+                  height="22"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                  <circle cx="9" cy="7" r="4" />
+                  <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                  <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                </svg>
+                <span>Trusted Emergency Contacts</span>
+              </div>
+              <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                Designated recipients alerted in priority order when an SOS trigger is activated.
+              </p>
+            </div>
+
+            <button className="btn btn-primary" onClick={openAddContactModal}>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+              <span>Add Emergency Contact</span>
+            </button>
+          </div>
+
+          {contactsLoading ? (
+            <div style={{ color: 'var(--text-secondary)', padding: '2rem 0', textAlign: 'center' }}>
+              Loading your trusted contacts securely...
+            </div>
+          ) : contacts.length === 0 ? (
+            <div className="empty-state">
+              <div className="empty-state-icon">🛡️</div>
+              <h3 className="empty-state-title">No Emergency Contacts Configured</h3>
+              <p className="empty-state-desc">
+                Add at least one trusted contact (such as a family member, friend, or coworker) who will receive your silent SOS alerts.
+              </p>
+              <button className="btn btn-primary" onClick={openAddContactModal}>
+                + Add Your First Contact
+              </button>
+            </div>
+          ) : (
+            <div className="contacts-grid">
+              {contacts.map((contact) => (
+                <div key={contact.id} className="contact-card">
+                  <div className="contact-card-top">
+                    <div className="contact-name">{contact.contact_name}</div>
+                    <span
+                      className={`priority-pill ${
+                        contact.priority_order === 1
+                          ? 'priority-1'
+                          : contact.priority_order === 2
+                          ? 'priority-2'
+                          : 'priority-other'
+                      }`}
+                    >
+                      Priority {contact.priority_order} {contact.priority_order === 1 ? '• Primary' : ''}
+                    </span>
+                  </div>
+
+                  <div className="contact-details">
+                    {contact.contact_phone && (
+                      <div className="contact-detail-row">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-green)" strokeWidth="2">
+                          <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z" />
+                        </svg>
+                        <span>{contact.contact_phone}</span>
+                      </div>
+                    )}
+                    {contact.contact_email && (
+                      <div className="contact-detail-row">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="var(--accent-blue)" strokeWidth="2">
+                          <path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z" />
+                          <polyline points="22,6 12,13 2,6" />
+                        </svg>
+                        <span>{contact.contact_email}</span>
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="contact-actions">
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => openEditContactModal(contact)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn btn-danger-outline btn-sm"
+                      onClick={() => setDeleteConfirmContact(contact)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {/* Add / Edit Contact Modal */}
+      {contactModalOpen && (
+        <div className="modal-backdrop" onClick={() => setContactModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title">
+                {editingContact ? 'Edit Emergency Contact' : 'Add New Emergency Contact'}
+              </h3>
+              <button
+                className="modal-close-btn"
+                onClick={() => setContactModalOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            {contactFormError && (
+              <div className="alert alert-error">
+                <span>✗</span>
+                <span>{contactFormError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleSaveContact}>
+              <div className="form-group">
+                <label className="form-label" htmlFor="contact-name">Contact Full Name *</label>
+                <input
+                  id="contact-name"
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Alex Rivera"
+                  value={contactForm.contact_name}
+                  onChange={(e) => setContactForm({ ...contactForm, contact_name: e.target.value })}
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor="contact-phone">Phone Number (SMS Alert Target)</label>
+                <input
+                  id="contact-phone"
+                  type="tel"
+                  className="form-input"
+                  placeholder="+1 (555) 019-9001"
+                  value={contactForm.contact_phone}
+                  onChange={(e) => setContactForm({ ...contactForm, contact_phone: e.target.value })}
+                />
+                <span className="form-hint">At least one contact method (phone or email) is required</span>
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor="contact-email">Email Address (Email Alert Target)</label>
+                <input
+                  id="contact-email"
+                  type="email"
+                  className="form-input"
+                  placeholder="alex.rivera@example.com"
+                  value={contactForm.contact_email}
+                  onChange={(e) => setContactForm({ ...contactForm, contact_email: e.target.value })}
+                />
+              </div>
+
+              <div className="form-group">
+                <label className="form-label" htmlFor="contact-priority">Notification Priority Order</label>
+                <input
+                  id="contact-priority"
+                  type="number"
+                  min="1"
+                  className="form-input"
+                  placeholder="1"
+                  value={contactForm.priority_order}
+                  onChange={(e) => setContactForm({ ...contactForm, priority_order: e.target.value })}
+                />
+                <span className="form-hint">Priority 1 receives alerts first. Lower numbers indicate higher urgency.</span>
+              </div>
+
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={() => setContactModalOpen(false)}
+                  disabled={contactFormLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={contactFormLoading}
+                >
+                  {contactFormLoading ? 'Saving...' : editingContact ? 'Save Changes' : 'Add Contact'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmContact && (
+        <div className="modal-backdrop" onClick={() => setDeleteConfirmContact(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title" style={{ color: 'var(--accent-red)' }}>
+                Remove Emergency Contact
+              </h3>
+              <button
+                className="modal-close-btn"
+                onClick={() => setDeleteConfirmContact(null)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
+              Are you sure you want to remove <strong>{deleteConfirmContact.contact_name}</strong> from your emergency contacts list? They will no longer receive distress alerts.
+            </p>
+
+            <div className="modal-actions">
+              <button
+                className="btn btn-outline"
+                onClick={() => setDeleteConfirmContact(null)}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={handleDeleteContact}
+              >
+                Confirm Removal
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Diagnostics Toggle & Card */}
       <section className="card">
         <div className="card-header">
           <div className="card-title">
@@ -146,97 +781,63 @@ export default function App() {
             >
               <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
             </svg>
-            <span>Backend Health Status & Connectivity</span>
+            <span>Backend Diagnostics & Health</span>
           </div>
 
-          <button
-            className="btn btn-outline"
-            onClick={checkHealth}
-            disabled={status === 'loading'}
-          >
-            <svg
-              width="14"
-              height="14"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => setShowDiagnostics(!showDiagnostics)}
             >
-              <path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67" />
-            </svg>
-            {status === 'loading' ? 'Checking...' : 'Refresh Health Check'}
-          </button>
+              {showDiagnostics ? 'Hide Diagnostics' : 'View Diagnostics'}
+            </button>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={checkHealth}
+              disabled={healthStatus === 'loading'}
+            >
+              {healthStatus === 'loading' ? 'Checking...' : 'Refresh'}
+            </button>
+          </div>
         </div>
 
-        {status === 'loading' && (
-          <div style={{ color: 'var(--text-secondary)', padding: '1rem 0' }}>
-            Querying <code>/api/v1/health</code> via Vite development proxy...
-          </div>
-        )}
-
-        {status === 'connected' && healthData && (
-          <div>
-            <p style={{ fontSize: '0.88rem', color: 'var(--accent-green)', marginBottom: '0.85rem' }}>
-              ✓ Backend service connected and responding with HTTP 200 OK.
-            </p>
-            <div className="health-grid">
-              <div className="health-item">
-                <div className="health-label">API Status</div>
-                <div className="health-value" style={{ color: 'var(--accent-green)' }}>
-                  {healthData.services?.api || healthData.status}
-                </div>
-              </div>
-              <div className="health-item">
-                <div className="health-label">Database Status</div>
-                <div 
-                  className="health-value" 
-                  style={{ color: healthData.services?.database === 'ok' ? 'var(--accent-green)' : 'var(--text-muted)' }}
-                >
-                  {healthData.services?.database === 'ok' ? 'PostgreSQL Online' : (healthData.services?.database || 'Ready')}
-                </div>
-              </div>
-              <div className="health-item">
-                <div className="health-label">Service Identifier</div>
-                <div className="health-value">{healthData.service}</div>
-              </div>
-              <div className="health-item">
-                <div className="health-label">API Version</div>
-                <div className="health-value">{healthData.version}</div>
-              </div>
-              <div className="health-item">
-                <div className="health-label">Environment</div>
-                <div className="health-value">{healthData.environment}</div>
-              </div>
-              <div className="health-item">
-                <div className="health-label">Process Uptime</div>
-                <div className="health-value">{healthData.uptime} seconds</div>
-              </div>
-              <div className="health-item">
-                <div className="health-label">Last Checked</div>
-                <div className="health-value">{lastChecked || 'Just now'}</div>
+        {showDiagnostics && healthData && (
+          <div className="health-grid">
+            <div className="health-item">
+              <div className="health-label">API Service</div>
+              <div className="health-value" style={{ color: 'var(--accent-green)' }}>
+                {healthData.services?.api || healthData.status}
               </div>
             </div>
-          </div>
-        )}
-
-        {status === 'unavailable' && (
-          <div style={{ padding: '0.5rem 0' }}>
-            <p style={{ color: 'var(--accent-red)', fontWeight: 600, marginBottom: '0.5rem' }}>
-              ✗ Backend Service Unavailable
-            </p>
-            <p style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-              Could not reach <code>GET /api/v1/health</code>. Ensure the backend server is running on port 5000 (<code>npm run dev:server</code>).
-            </p>
-            {errorMsg && (
-              <p style={{ fontSize: '0.8rem', color: '#f87171', background: 'rgba(239, 68, 68, 0.1)', padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-sm)', marginBottom: '1rem' }}>
-                Error details: {errorMsg}
-              </p>
-            )}
-            <button className="btn btn-primary" onClick={checkHealth}>
-              Retry Connection
-            </button>
+            <div className="health-item">
+              <div className="health-label">PostgreSQL Database</div>
+              <div
+                className="health-value"
+                style={{
+                  color: healthData.services?.database === 'ok' ? 'var(--accent-green)' : 'var(--accent-amber)',
+                }}
+              >
+                {healthData.services?.database === 'ok' ? 'Online' : healthData.services?.database || 'Ready'}
+              </div>
+            </div>
+            <div className="health-item">
+              <div className="health-label">Database Latency</div>
+              <div className="health-value">
+                {healthData.databaseLatencyMs !== undefined ? `${healthData.databaseLatencyMs} ms` : 'N/A'}
+              </div>
+            </div>
+            <div className="health-item">
+              <div className="health-label">Environment</div>
+              <div className="health-value">{healthData.environment}</div>
+            </div>
+            <div className="health-item">
+              <div className="health-label">Uptime</div>
+              <div className="health-value">{healthData.uptime}s</div>
+            </div>
+            <div className="health-item">
+              <div className="health-label">Last Probed</div>
+              <div className="health-value">{lastChecked || 'Just now'}</div>
+            </div>
           </div>
         )}
       </section>
@@ -258,18 +859,38 @@ export default function App() {
               <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
               <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
             </svg>
-            <span>Incremental Development Milestones</span>
+            <span>Incremental Development Roadmap</span>
           </div>
         </div>
 
         <div className="roadmap-grid">
           {milestones.map((item, idx) => (
-            <div key={idx} className={`roadmap-card ${item.active ? 'active' : ''}`}>
+            <div
+              key={idx}
+              className={`roadmap-card ${
+                item.state === 'active' ? 'active' : item.state === 'completed' ? 'completed' : ''
+              }`}
+            >
               <div className="roadmap-card-header">
-                <span style={{ fontSize: '0.75rem', color: item.active ? 'var(--accent-green)' : 'var(--text-muted)', fontWeight: 700 }}>
+                <span
+                  style={{
+                    fontSize: '0.75rem',
+                    color: item.state === 'active' ? 'var(--accent-green)' : item.state === 'completed' ? 'var(--accent-blue)' : 'var(--text-muted)',
+                    fontWeight: 700,
+                  }}
+                >
                   {item.step}
                 </span>
-                <span className={`badge ${item.active ? 'badge-connected' : 'badge-step'}`} style={{ fontSize: '0.7rem', padding: '0.2rem 0.6rem' }}>
+                <span
+                  className={`badge ${
+                    item.state === 'active'
+                      ? 'badge-connected'
+                      : item.state === 'completed'
+                      ? 'badge-step'
+                      : 'badge-unavailable'
+                  }`}
+                  style={{ fontSize: '0.7rem', padding: '0.2rem 0.6rem' }}
+                >
                   {item.status}
                 </span>
               </div>
@@ -282,9 +903,9 @@ export default function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <p>Silent SOS Emergency Web App • Step 1 Project Skeleton Initialized</p>
+        <p>Silent SOS Emergency Web App • Step 3: Secure Authentication & Contacts Management</p>
         <p style={{ marginTop: '0.35rem', color: 'var(--text-muted)' }}>
-          Strict separation maintained • Zero unauthorized data tracking • Security headers active
+          Argon2id password hashing • Minimal-claim JWT {`{ sub }`} • Strict tenant ownership isolation
         </p>
       </footer>
     </div>

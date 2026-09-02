@@ -3,17 +3,18 @@
 -- WARNING: Development and testing environment use ONLY.
 -- ==============================================================================
 
--- 1. Demo User
-INSERT INTO users (id, full_name, phone_number, email, created_at, updated_at)
+-- 1. Demo User (Password: DemoPassword123!)
+INSERT INTO users (id, full_name, phone_number, email, password_hash, created_at, updated_at)
 VALUES (
     'a0000000-0000-0000-0000-000000000001',
     'Demo User (Dev Baseline)',
     '+15550199000',
     'demo.user@example.local',
+    '$argon2id$v=19$m=65536,p=4,t=3$+NcuDa4+evdYvaYt5ft5bQ$4mj/aQHw1Hjr9iVrHUioMxeuIICsTayU0Y2whT/WZvw',
     NOW() - INTERVAL '30 days',
     NOW() - INTERVAL '30 days'
 )
-ON CONFLICT (id) DO NOTHING;
+ON CONFLICT (id) DO UPDATE SET password_hash = EXCLUDED.password_hash;
 
 -- 2. Emergency Contacts (2 Trusted Contacts with priority ordering)
 INSERT INTO emergency_contacts (id, user_id, contact_name, contact_phone, contact_email, priority_order, created_at, updated_at)

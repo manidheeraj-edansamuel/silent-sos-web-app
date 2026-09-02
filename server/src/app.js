@@ -4,6 +4,8 @@ import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
 import healthRouter from './routes/health.js';
+import authRouter from './routes/auth.js';
+import contactsRouter from './routes/contacts.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 
 // Load environment variables
@@ -45,6 +47,8 @@ if (process.env.NODE_ENV !== 'test') {
 
 // API Routes
 app.use('/api/v1/health', healthRouter);
+app.use('/api/v1/auth', authRouter);
+app.use('/api/v1/contacts', contactsRouter);
 
 // 404 & Global Error Handling
 app.use(notFoundHandler);

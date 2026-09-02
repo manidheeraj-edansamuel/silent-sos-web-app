@@ -17,33 +17,31 @@ This is an emergency-oriented web application and is engineered with strict safe
 
 ## 🏗️ Incremental Development Status
 
-> **Current Phase: Step 2 — Database Implementation & Geospatial Modeling**
+> **Current Phase: Step 3 — Secure Authentication & Emergency Contact Management**
 > 
-> In this phase, the complete PostgreSQL 18.6 + PostGIS 3.6.2 relational and spatial database architecture has been implemented, including deterministic migrations (001–007), development seed scripts, `pg` connection pool layer, and database-aware `/api/v1/health` diagnostics.
+> In this phase, secure Argon2id password hashing, minimal-claim JWT authentication (`{ sub: userId }`), authentication rate limiting, current user `/api/v1/auth/me` inspection, and protected emergency contacts CRUD with strict tenant ownership isolation and priority ordering have been implemented across the backend and frontend.
 
-### Completed in Step 1 & Step 2
+### Completed in Step 1, Step 2 & Step 3
 - [x] Multi-package workspace directory structure (`client/`, `server/`, `database/`, `docs/`)
-- [x] React + Vite frontend skeleton with responsive layout and real-time backend health connectivity display
+- [x] React + Vite frontend with responsive layout and real-time backend health connectivity display
 - [x] Node.js + Express backend skeleton with security headers (`helmet`), CORS configuration, and `/api/v1/health` endpoint
-- [x] PostgreSQL 18.6 & PostGIS 3.6.2 database schema definitions
-- [x] Migration 001: Extensions (`pgcrypto`, `postgis`)
-- [x] Migration 002: `users` table with email uniqueness and phone index
-- [x] Migration 003: `emergency_contacts` table with contact constraints and priority ordering
-- [x] Migration 004: `alerts` table with `alert_status` enum and active alert partial index
-- [x] Migration 005: `alert_locations` PostGIS geography table with GiST spatial indexing
-- [x] Migration 006: `alert_events` immutable audit trail
-- [x] Migration 007: `notification_attempts` delivery lifecycle records
+- [x] PostgreSQL 18.6 & PostGIS 3.6.2 database schema definitions (migrations 001–007)
+- [x] Migration 008: Added `password_hash` and `last_login_at` to `users`
 - [x] Idempotent migration runner (`database/scripts/migrate.js`) with `schema_migrations` tracking
-- [x] Isolated development mock seed runner (`database/scripts/seed.js`)
-- [x] Database creation helper (`database/scripts/init-db.js`)
+- [x] Development mock seed runner (`database/scripts/seed.js`) with Argon2id seed password
 - [x] Backend `pg.Pool` connection layer (`server/src/config/database.js`) with graceful error handling
-- [x] Enhanced `/api/v1/health` reporting API & database service health status
-- [x] Automated test suites for database schemas, spatial calculations, and health endpoint
+- [x] Argon2id password hashing service (`server/src/services/passwordService.js`)
+- [x] Minimal-claim JWT token generator & verification service (`server/src/services/tokenService.js`)
+- [x] JWT authentication middleware (`server/src/middleware/auth.js`)
+- [x] Authentication rate limiter (`server/src/middleware/rateLimiter.js`)
+- [x] Auth REST API (`POST /register`, `POST /login`, `POST /logout`, `GET /me`)
+- [x] Emergency contacts REST API (`GET`, `POST`, `GET :id`, `PUT :id`, `DELETE :id`) with transactional priority management
+- [x] Strict tenant ownership isolation preventing cross-user contact access
+- [x] Modern, responsive frontend authentication & contact management UI
+- [x] Automated unit and integration test suites for Security, Auth, Contacts, and Health
 
-### Planned for Future Milestones (Step 3+)
-- ❌ User authentication & session management (JWT / Argon2 password hashing) — *Step 3*
-- ❌ Emergency contacts management REST endpoints — *Step 3*
-- ❌ Silent SOS activation triggers & alert lifecycle — *Step 4*
+### Planned for Future Milestones (Step 4+)
+- ❌ Silent SOS activation triggers & stealth UI — *Step 4*
 - ❌ GPS / Geolocation capture & live tracking — *Step 4*
 - ❌ Socket.IO / WebSocket real-time live coordinate streaming — *Step 5*
 - ❌ Redis caching & BullMQ async notification queues — *Step 5*
