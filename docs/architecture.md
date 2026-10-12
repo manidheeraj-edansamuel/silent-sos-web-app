@@ -42,7 +42,7 @@ The **Silent SOS Emergency Web App** provides a covert, fast, and reliable mecha
 - Node.js/Express backend baseline with `/api/v1` routing & `/api/v1/health`
 - Workspace structure, `.gitignore`, `.env.example`, and baseline verification
 
-### Phase 2: Database & Geospatial Modeling (Current Phase - Completed)
+### Phase 2: Database & Geospatial Modeling (Completed)
 - PostgreSQL 18.6 relational schemas with PostGIS 3.6.2 spatial extension
 - Tables: `users`, `emergency_contacts`, `alerts`, `alert_locations`, `alert_events`, `notification_attempts`
 - Spatial index: GiST index on `alert_locations (location)`
@@ -50,25 +50,31 @@ The **Silent SOS Emergency Web App** provides a covert, fast, and reliable mecha
 - Development mock seeds (`database/scripts/seed.js`)
 - Backend `pg.Pool` connection layer with `/api/v1/health` diagnostic integration
 
-### Phase 3: Authentication & User Profiles (Future Milestone)
-- Secure user registration, password hashing (Argon2 / bcrypt), and JWT authentication
-- Contact management for trusted individuals (phone numbers, emails, relationship)
+### Phase 3: Authentication & User Profiles (Completed)
+- Secure user registration and login with Argon2id password hashing (`m=65536, t=3, p=4`)
+- Minimal-claim JWT session issuance (`{ sub: userId }`) with auth middleware
+- Rate limiting on authentication endpoints (10 requests / 15 minutes)
+- Multi-tenant emergency contacts CRUD with strict per-user ownership and transactional priority collision handling
+- React authentication UI and contacts management dashboard
 
-### Phase 4: Silent SOS Engine & Real-time Location (Future Milestone)
-- Quick silent trigger mechanisms (stealth UI, hotkeys, disguised modes)
-- Geolocation capture with fallback handling
-- Secure cryptographic tracking token generation (UUIDv4/nanoID)
-- Socket.IO gateway for real-time tracking
+### Phase 4: Silent SOS Alert Trigger & Geolocation Tracking (Completed)
+- One-touch silent SOS distress activation with graceful location fallback (continues even if GPS is denied)
+- Cryptographically secure 192-bit tracking token generation with SHA-256 hash storage in PostgreSQL (Migration 009)
+- PostGIS geography coordinate storage (`ST_MakePoint`) and coordinate range validation
+- Continuous browser geolocation streaming via `navigator.geolocation.watchPosition` with automatic cleanup
+- Active alert restoration across page refreshes (`GET /api/v1/alerts/active`)
+- Alert resolution lifecycle with resolution reason and immutable audit trail logging (`alert_events`)
 
-### Phase 5: Notification Queues & Trusted Contact Portal (Future Milestone)
+### Phase 5: Real-time Streaming & Notification Queues (Future Milestone)
+- Socket.IO gateway for real-time bidirectional coordinate streaming
 - BullMQ asynchronous worker pipeline backed by Redis
 - Multi-channel notification delivery (SMS via Twilio, Email via SES/SendGrid)
 - Dedicated secure tracking view for emergency contacts with Leaflet maps
-- Alert acknowledgement, status tracking, and resolution workflow
 
-### Phase 6: PWA, Offline Capabilities & Hardening (Future Milestone)
+### Phase 6: PWA, Offline Capabilities & Stealth Mode (Future Milestone)
 - Service worker caching, offline capability, installability
-- Strict rate limiting, audit logging, and penetration testing verification
+- Offline emergency alert queuing with IndexedDB synchronization
+- Decoy calculator/notes stealth UI and panic hotkeys
 
 ---
 
@@ -88,6 +94,8 @@ erDiagram
         varchar full_name
         varchar phone_number
         varchar email
+        varchar password_hash
+        timestamptz last_login_at
         timestamptz created_at
         timestamptz updated_at
     }
@@ -107,6 +115,7 @@ erDiagram
         uuid id PK
         uuid user_id FK
         alert_status status
+        varchar tracking_token_hash
         timestamptz triggered_at
         timestamptz acknowledged_at
         timestamptz resolved_at

@@ -720,3 +720,198 @@ body {
   padding-top: 2rem;
   border-top: 1px solid var(--border-subtle);
 }
+
+/* ==============================================================================
+   Step 4: Silent SOS Trigger & Active Alert Panels
+   ============================================================================== */
+
+.sos-trigger-panel {
+  background: linear-gradient(135deg, rgba(225, 29, 72, 0.08), rgba(17, 24, 39, 0.85));
+  border: 1px solid rgba(225, 29, 72, 0.25);
+  border-radius: var(--radius-lg);
+  padding: 1.5rem;
+  box-shadow: 0 10px 30px -10px rgba(225, 29, 72, 0.15);
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.sos-trigger-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.sos-trigger-title {
+  font-family: var(--font-heading);
+  font-size: 1.15rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: #fff;
+}
+
+.sos-trigger-desc {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  line-height: 1.5;
+}
+
+.sos-btn-wrapper {
+  display: flex;
+  justify-content: center;
+  padding: 1.25rem 0;
+}
+
+.btn-sos-trigger {
+  background: linear-gradient(135deg, #e11d48 0%, #be123c 50%, #9f1239 100%);
+  color: #ffffff;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-radius: var(--radius-full);
+  padding: 1.25rem 2.5rem;
+  font-family: var(--font-heading);
+  font-size: 1.25rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  cursor: pointer;
+  box-shadow: 0 0 35px rgba(225, 29, 72, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  transition: all 0.25s ease;
+  min-width: 280px;
+  justify-content: center;
+}
+
+.btn-sos-trigger:hover:not(:disabled) {
+  transform: scale(1.03);
+  box-shadow: 0 0 50px rgba(225, 29, 72, 0.75);
+}
+
+.btn-sos-trigger:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.btn-sos-trigger:disabled {
+  opacity: 0.75;
+  cursor: not-allowed;
+  animation: pulse-slow 1.5s infinite;
+}
+
+/* Active Alert State */
+.sos-active-panel {
+  background: linear-gradient(135deg, rgba(225, 29, 72, 0.18), rgba(24, 10, 16, 0.95));
+  border: 2px solid var(--accent-red);
+  border-radius: var(--radius-lg);
+  padding: 1.75rem;
+  box-shadow: 0 0 40px rgba(225, 29, 72, 0.35);
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  animation: border-pulse 2s infinite ease-in-out;
+}
+
+@keyframes border-pulse {
+  0%, 100% {
+    border-color: rgba(225, 29, 72, 0.9);
+    box-shadow: 0 0 30px rgba(225, 29, 72, 0.3);
+  }
+  50% {
+    border-color: rgba(251, 113, 133, 0.6);
+    box-shadow: 0 0 50px rgba(225, 29, 72, 0.5);
+  }
+}
+
+.sos-active-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.sos-badge-active {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(225, 29, 72, 0.3);
+  border: 1px solid var(--accent-red);
+  color: #fff;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-full);
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sos-pulse-dot {
+  width: 10px;
+  height: 10px;
+  background-color: #ef4444;
+  border-radius: 50%;
+  animation: pulse-dot 1.2s infinite ease-in-out;
+}
+
+.sos-pulse-dot.green {
+  background-color: #10b981;
+}
+
+@keyframes pulse-dot {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.4);
+    opacity: 0.4;
+  }
+}
+
+.sos-location-card {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sos-location-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.75rem;
+}
+
+.sos-location-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.sos-location-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+  font-weight: 600;
+}
+
+.sos-location-val {
+  font-size: 0.92rem;
+  font-family: monospace;
+  color: var(--text-primary);
+  font-weight: 600;
+}
+
+.sos-active-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 1rem;
+}
+

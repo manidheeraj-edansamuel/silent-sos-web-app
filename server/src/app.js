@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import healthRouter from './routes/health.js';
 import authRouter from './routes/auth.js';
 import contactsRouter from './routes/contacts.js';
+import alertsRouter from './routes/alerts.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 
 // Load environment variables
@@ -49,6 +50,7 @@ if (process.env.NODE_ENV !== 'test') {
 app.use('/api/v1/health', healthRouter);
 app.use('/api/v1/auth', authRouter);
 app.use('/api/v1/contacts', contactsRouter);
+app.use('/api/v1/alerts', alertsRouter);
 
 // 404 & Global Error Handling
 app.use(notFoundHandler);

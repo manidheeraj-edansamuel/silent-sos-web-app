@@ -324,10 +324,170 @@ Removes a contact and automatically recompactions priority ordering (1, 2, 3...)
 
 ---
 
+### 11. Trigger Silent SOS Alert
+Silently creates an emergency alert session, generates an unguessable 192-bit tracking token, stores its SHA-256 hash in PostgreSQL, records initial PostGIS geography coordinates (if available), and creates an immutable audit event.
+
+- **Route:** `POST /api/v1/alerts/trigger`
+- **Authentication:** `Bearer <token>` (Required)
+- **Request Body:**
+```json
+{
+  "trigger_source": "manual_ui",
+  "location": {
+    "latitude": 37.7749,
+    "longitude": -122.4194,
+    "accuracy_meters": 8.5,
+    "altitude_meters": 15.0,
+    "heading_degrees": 180.0,
+    "speed_mps": 1.2
+  },
+  "location_error": null
+}
+```
+*Note: If location is unavailable or denied by user, `location` may be `null` and `location_error` can be provided (e.g. `"PERMISSION_DENIED"`). The alert will still be created with audit event status `location_status: "unavailable"`.*
+
+- **Success Response (`201 Created`):**
+```json
+{
+  "status": "ok",
+  "message": "Emergency SOS alert triggered successfully.",
+  "data": {
+    "alert": {
+      "id": "5f4153bf-6b3d-4b7f-b4e4-09d59d816767",
+      "status": "active",
+      "triggered_at": "2026-09-21T07:10:00.000Z",
+      "tracking_token": "j8q-Z_92kd18X74lq9vB...",
+      "location": {
+        "id": "d1a2b3c4-0000-0000-0000-000000000001",
+        "latitude": 37.7749,
+        "longitude": -122.4194,
+        "accuracy_meters": 8.5,
+        "altitude_meters": 15.0,
+        "heading_degrees": 180.0,
+        "speed_mps": 1.2,
+        "logged_at": "2026-09-21T07:10:00.000Z"
+      }
+    }
+  }
+}
+```
+
+---
+
+### 12. Push Alert Location Coordinate Breadcrumb
+Records a new PostGIS geography point breadcrumb for an active alert session.
+
+- **Route:** `POST /api/v1/alerts/:id/location`
+- **Authentication:** `Bearer <token>` (Required)
+- **Request Body:**
+```json
+{
+  "latitude": 37.7755,
+  "longitude": -122.4185,
+  "accuracy_meters": 5.0,
+  "speed_mps": 2.1
+}
+```
+- **Success Response (`200 OK`):**
+```json
+{
+  "status": "ok",
+  "message": "Location breadcrumb recorded successfully.",
+  "data": {
+    "location": {
+      "id": "d1a2b3c4-0000-0000-0000-000000000002",
+      "alert_id": "5f4153bf-6b3d-4b7f-b4e4-09d59d816767",
+      "latitude": 37.7755,
+      "longitude": -122.4185,
+      "accuracy_meters": 5.0,
+      "altitude_meters": null,
+      "heading_degrees": null,
+      "speed_mps": 2.1,
+      "logged_at": "2026-09-21T07:10:15.000Z"
+    }
+  }
+}
+```
+- **Error Responses:**
+  - `400 Bad Request`: Validation failure (out-of-bounds coordinates) or alert status is not `'active'`.
+  - `404 Not Found`: Alert not found or owned by another user.
+
+---
+
+### 13. Resolve Emergency Alert
+Marks an active alert as `'resolved'`, records resolution timestamp and reason, and creates an audit event.
+
+- **Route:** `POST /api/v1/alerts/:id/resolve`
+- **Authentication:** `Bearer <token>` (Required)
+- **Request Body:**
+```json
+{
+  "reason": "Safe Arrival / Threat Passed"
+}
+```
+- **Success Response (`200 OK`):**
+```json
+{
+  "status": "ok",
+  "message": "Emergency alert marked as resolved.",
+  "data": {
+    "alert": {
+      "id": "5f4153bf-6b3d-4b7f-b4e4-09d59d816767",
+      "user_id": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+      "status": "resolved",
+      "triggered_at": "2026-09-21T07:10:00.000Z",
+      "resolved_at": "2026-09-21T07:15:00.000Z",
+      "created_at": "2026-09-21T07:10:00.000Z",
+      "updated_at": "2026-09-21T07:15:00.000Z"
+    }
+  }
+}
+```
+- **Error Responses:**
+  - `404 Not Found`: Alert not found or owned by another user.
+
+---
+
+### 14. Get Active Emergency Alert
+Retrieves the currently active SOS alert for the authenticated user, including the most recent PostGIS location fix.
+
+- **Route:** `GET /api/v1/alerts/active`
+- **Authentication:** `Bearer <token>` (Required)
+- **Success Response (`200 OK` - Active Alert Exists):**
+```json
+{
+  "status": "ok",
+  "data": {
+    "alert": {
+      "id": "5f4153bf-6b3d-4b7f-b4e4-09d59d816767",
+      "user_id": "e3b0c442-98fc-1c14-9afb-4c8996fb9242",
+      "status": "active",
+      "triggered_at": "2026-09-21T07:10:00.000Z",
+      "location": {
+        "id": "d1a2b3c4-0000-0000-0000-000000000002",
+        "latitude": 37.7755,
+        "longitude": -122.4185,
+        "accuracy_meters": 5.0,
+        "logged_at": "2026-09-21T07:10:15.000Z"
+      }
+    }
+  }
+}
+```
+- **Success Response (`200 OK` - No Active Alert):**
+```json
+{
+  "status": "ok",
+  "data": {
+    "alert": null
+  }
+}
+```
+
+---
+
 ## 3. Planned Routes for Future Milestones
 
-### SOS Alert Lifecycle (`/api/v1/alerts`) — *Step 4 & 5*
-- `POST /api/v1/alerts/trigger` — Silently initiate emergency alert
-- `POST /api/v1/alerts/:id/location` — Push updated coordinate breadcrumb
-- `POST /api/v1/alerts/:id/resolve` — Mark alert as safe/resolved
-- `GET /api/v1/alerts/track/:token` — Secure recipient tracking query
+### Recipient Public Tracking & Real-Time Gateway — *Step 5*
+- `GET /api/v1/alerts/track/:token` — Secure recipient tracking query via SHA-256 token lookup
+- `WSS /socket.io` — Real-time bidirectional coordinate streaming

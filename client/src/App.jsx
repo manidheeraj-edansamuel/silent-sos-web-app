@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 
 export default function App() {
   // Authentication & Session State
@@ -28,6 +28,16 @@ export default function App() {
   const [contactFormError, setContactFormError] = useState('');
   const [contactFormLoading, setContactFormLoading] = useState(false);
   const [deleteConfirmContact, setDeleteConfirmContact] = useState(null);
+  
+  // Step 4: Emergency SOS Alert & Geolocation State
+  const [activeAlert, setActiveAlert] = useState(null);
+  const [sosActivating, setSosActivating] = useState(false);
+  const [locationStatus, setLocationStatus] = useState('idle'); // 'idle' | 'acquiring' | 'tracking' | 'unavailable'
+  const [locationError, setLocationError] = useState('');
+  const [resolveModalOpen, setResolveModalOpen] = useState(false);
+  const [resolveReason, setResolveReason] = useState('Safe Arrival / Threat Passed');
+  const [resolveLoading, setResolveLoading] = useState(false);
+  const watchIdRef = useRef(null);
 
   // Global Alert / Feedback State
   const [alertFeedback, setAlertFeedback] = useState(null);
@@ -120,13 +130,121 @@ export default function App() {
     }
   }, []);
 
+  // 4. Fetch Active SOS Alert (/api/v1/alerts/active) on startup
+  const fetchActiveAlert = useCallback(async (activeToken) => {
+    if (!activeToken) {
+      setActiveAlert(null);
+      return;
+    }
+    try {
+      const res = await fetch('/api/v1/alerts/active', {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+          Accept: 'application/json',
+        },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.data?.alert) {
+          setActiveAlert(data.data.alert);
+          setLocationStatus(data.data.alert.location ? 'tracking' : 'unavailable');
+        } else {
+          setActiveAlert(null);
+          setLocationStatus('idle');
+        }
+      }
+    } catch (err) {
+      console.error('[Active alert fetch error]:', err);
+    }
+  }, []);
+
   useEffect(() => {
     checkHealth();
     if (token) {
       fetchUserProfile(token);
       fetchContacts(token);
+      fetchActiveAlert(token);
     }
-  }, [checkHealth, fetchUserProfile, fetchContacts, token]);
+  }, [checkHealth, fetchUserProfile, fetchContacts, fetchActiveAlert, token]);
+
+  // Continuous Location Tracking for Active Alert via watchPosition
+  useEffect(() => {
+    if (!activeAlert?.id || activeAlert?.status !== 'active') {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+      return;
+    }
+
+    if (!('geolocation' in navigator)) {
+      setLocationStatus('unavailable');
+      setLocationError('Geolocation API not supported by browser.');
+      return;
+    }
+
+    const alertId = activeAlert.id;
+    setLocationStatus('tracking');
+
+    const handlePositionUpdate = async (pos) => {
+      const coords = {
+        latitude: pos.coords.latitude,
+        longitude: pos.coords.longitude,
+        accuracy_meters: pos.coords.accuracy !== null && !isNaN(pos.coords.accuracy) ? pos.coords.accuracy : null,
+        altitude_meters: pos.coords.altitude !== null && !isNaN(pos.coords.altitude) ? pos.coords.altitude : null,
+        heading_degrees: pos.coords.heading !== null && !isNaN(pos.coords.heading) ? pos.coords.heading : null,
+        speed_mps: pos.coords.speed !== null && !isNaN(pos.coords.speed) ? pos.coords.speed : null,
+      };
+
+      try {
+        const res = await fetch(`/api/v1/alerts/${alertId}/location`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+          body: JSON.stringify(coords),
+        });
+
+        if (res.ok) {
+          const resData = await res.json();
+          if (resData.data?.location) {
+            setActiveAlert((prev) =>
+              prev && prev.id === alertId ? { ...prev, location: resData.data.location } : prev
+            );
+            setLocationStatus('tracking');
+            setLocationError('');
+          }
+        }
+      } catch (err) {
+        console.error('[Location update sync error]:', err);
+      }
+    };
+
+    const handlePositionError = (err) => {
+      console.warn('[Geolocation watch warning]:', err.message);
+      setLocationError(err.message);
+      if (err.code === 1) {
+        setLocationStatus('unavailable');
+      }
+    };
+
+    const watchId = navigator.geolocation.watchPosition(handlePositionUpdate, handlePositionError, {
+      enableHighAccuracy: true,
+      maximumAge: 5000,
+      timeout: 15000,
+    });
+
+    watchIdRef.current = watchId;
+
+    return () => {
+      if (watchIdRef.current !== null) {
+        navigator.geolocation.clearWatch(watchIdRef.current);
+        watchIdRef.current = null;
+      }
+    };
+  }, [activeAlert?.id, activeAlert?.status, token]);
 
   // Auth Handlers
   const handleAuthSubmit = async (e) => {
@@ -185,11 +303,130 @@ export default function App() {
     } catch (e) {
       // Ignore network failure on logout
     }
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
     localStorage.removeItem('silent_sos_token');
     setToken('');
     setUser(null);
     setContacts([]);
+    setActiveAlert(null);
+    setLocationStatus('idle');
     showAlert('You have been logged out successfully.', 'info');
+  };
+
+  // Step 4: SOS Trigger Handler
+  const handleTriggerSos = async () => {
+    if (sosActivating || activeAlert) return;
+    setSosActivating(true);
+    setLocationStatus('acquiring');
+    setLocationError('');
+
+    const sendTriggerPayload = async (locCoords, locErr) => {
+      try {
+        const res = await fetch('/api/v1/alerts/trigger', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/json',
+          },
+          body: JSON.stringify({
+            trigger_source: 'manual_ui',
+            location: locCoords,
+            location_error: locErr,
+          }),
+        });
+
+        const data = await res.json();
+        if (res.ok && data.data?.alert) {
+          // Store alert record without saving, logging, or exposing raw tracking token
+          const alertRecord = {
+            id: data.data.alert.id,
+            status: data.data.alert.status,
+            triggered_at: data.data.alert.triggered_at,
+            location: data.data.alert.location,
+          };
+          setActiveAlert(alertRecord);
+          setLocationStatus(locCoords ? 'tracking' : 'unavailable');
+          showAlert('🚨 Silent SOS Emergency Alert Triggered! Location tracking active.', 'error');
+        } else {
+          showAlert(data.message || 'Failed to trigger emergency alert.', 'error');
+        }
+      } catch (err) {
+        showAlert('Network error while triggering emergency alert.', 'error');
+      } finally {
+        setSosActivating(false);
+      }
+    };
+
+    if (!('geolocation' in navigator)) {
+      await sendTriggerPayload(null, 'GEOLOCATION_UNSUPPORTED');
+      return;
+    }
+
+    // Try acquiring GPS with 5s timeout; fall back gracefully if denied or unavailable
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const coords = {
+          latitude: pos.coords.latitude,
+          longitude: pos.coords.longitude,
+          accuracy_meters: pos.coords.accuracy !== null && !isNaN(pos.coords.accuracy) ? pos.coords.accuracy : null,
+          altitude_meters: pos.coords.altitude !== null && !isNaN(pos.coords.altitude) ? pos.coords.altitude : null,
+          heading_degrees: pos.coords.heading !== null && !isNaN(pos.coords.heading) ? pos.coords.heading : null,
+          speed_mps: pos.coords.speed !== null && !isNaN(pos.coords.speed) ? pos.coords.speed : null,
+        };
+        await sendTriggerPayload(coords, null);
+      },
+      async (geoErr) => {
+        const reasonCode =
+          geoErr.code === 1 ? 'PERMISSION_DENIED' : geoErr.code === 2 ? 'POSITION_UNAVAILABLE' : 'TIMEOUT';
+        setLocationError(geoErr.message || 'Location unavailable');
+        // Critical requirement: trigger MUST proceed even when location fails
+        await sendTriggerPayload(null, reasonCode);
+      },
+      { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
+    );
+  };
+
+  // Step 4: Resolve Alert Handler
+  const handleResolveAlert = async (e) => {
+    e.preventDefault();
+    if (!activeAlert) return;
+    setResolveLoading(true);
+
+    try {
+      const res = await fetch(`/api/v1/alerts/${activeAlert.id}/resolve`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+          Accept: 'application/json',
+        },
+        body: JSON.stringify({
+          reason: resolveReason || 'Safe Arrival / Threat Passed',
+        }),
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        if (watchIdRef.current !== null) {
+          navigator.geolocation.clearWatch(watchIdRef.current);
+          watchIdRef.current = null;
+        }
+        setActiveAlert(null);
+        setResolveModalOpen(false);
+        setLocationStatus('idle');
+        showAlert('Emergency alert marked as resolved. You are safe.', 'success');
+      } else {
+        showAlert(data.message || 'Failed to resolve emergency alert.', 'error');
+      }
+    } catch (err) {
+      showAlert('Network error while resolving emergency alert.', 'error');
+    } finally {
+      setResolveLoading(false);
+    }
   };
 
   // Contact Modal Handlers
@@ -304,16 +541,16 @@ export default function App() {
     {
       step: 'Step 3',
       name: 'Secure Authentication & Contacts Management',
-      status: 'Active / Complete',
-      state: 'active',
+      status: 'Completed',
+      state: 'completed',
       desc: 'Argon2id hashing, minimal JWT { sub }, rate limiting, multi-tenant contact CRUD.',
     },
     {
       step: 'Step 4',
       name: 'Silent SOS Trigger & Location Engine',
-      status: 'Planned',
-      state: 'planned',
-      desc: 'Stealth trigger UI, high-entropy tracking tokens, geolocation capture.',
+      status: 'Active / Complete',
+      state: 'active',
+      desc: 'One-touch SOS activation, PostGIS coordinates, continuous watchPosition telemetry, resolve lifecycle.',
     },
     {
       step: 'Step 5',
@@ -350,7 +587,7 @@ export default function App() {
         </div>
 
         <div className="header-actions">
-          <span className="badge badge-step">Step 3 Active</span>
+          <span className="badge badge-step">Step 4 Active</span>
           {healthStatus === 'connected' && (
             <span className="badge badge-connected">
               <span className="status-dot online"></span> API Online
@@ -518,8 +755,132 @@ export default function App() {
           </div>
         </section>
       ) : (
-        /* Authenticated View: Emergency Contacts Management Dashboard */
-        <section className="card">
+        <>
+          {/* Step 4: Silent SOS Emergency Trigger & Active Emergency Status */}
+          {activeAlert ? (
+            <section className="sos-active-panel">
+              <div className="sos-active-header">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+                  <span className="sos-badge-active">
+                    <span className="sos-pulse-dot"></span>
+                    Emergency SOS Active
+                  </span>
+                  <span style={{ fontSize: '0.82rem', color: 'var(--text-secondary)' }}>
+                    Triggered at {new Date(activeAlert.triggered_at).toLocaleTimeString()}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                  <span className={`sos-pulse-dot ${locationStatus === 'tracking' ? 'green' : ''}`}></span>
+                  <span style={{ fontSize: '0.8rem', color: locationStatus === 'tracking' ? 'var(--accent-green)' : 'var(--accent-amber)', fontWeight: 600 }}>
+                    {locationStatus === 'tracking' ? 'Live GPS Streaming' : locationStatus === 'unavailable' ? 'Location Unavailable' : 'Acquiring Fix...'}
+                  </span>
+                </div>
+              </div>
+
+              <div className="sos-location-card">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--text-primary)' }}>
+                    Continuous Coordinate Telemetry
+                  </span>
+                  {activeAlert.location?.logged_at && (
+                    <span style={{ fontSize: '0.74rem', color: 'var(--text-muted)' }}>
+                      Fix updated: {new Date(activeAlert.location.logged_at).toLocaleTimeString()}
+                    </span>
+                  )}
+                </div>
+
+                {activeAlert.location ? (
+                  <div className="sos-location-grid">
+                    <div className="sos-location-item">
+                      <span className="sos-location-label">Latitude</span>
+                      <span className="sos-location-val">{activeAlert.location.latitude.toFixed(6)}°</span>
+                    </div>
+                    <div className="sos-location-item">
+                      <span className="sos-location-label">Longitude</span>
+                      <span className="sos-location-val">{activeAlert.location.longitude.toFixed(6)}°</span>
+                    </div>
+                    <div className="sos-location-item">
+                      <span className="sos-location-label">Accuracy</span>
+                      <span className="sos-location-val">
+                        {activeAlert.location.accuracy_meters !== null ? `±${activeAlert.location.accuracy_meters.toFixed(1)} m` : 'N/A'}
+                      </span>
+                    </div>
+                    <div className="sos-location-item">
+                      <span className="sos-location-label">Altitude</span>
+                      <span className="sos-location-val">
+                        {activeAlert.location.altitude_meters !== null ? `${activeAlert.location.altitude_meters.toFixed(1)} m` : 'N/A'}
+                      </span>
+                    </div>
+                    <div className="sos-location-item">
+                      <span className="sos-location-label">Speed</span>
+                      <span className="sos-location-val">
+                        {activeAlert.location.speed_mps !== null ? `${activeAlert.location.speed_mps.toFixed(1)} m/s` : '0.0 m/s'}
+                      </span>
+                    </div>
+                    <div className="sos-location-item">
+                      <span className="sos-location-label">Heading</span>
+                      <span className="sos-location-val">
+                        {activeAlert.location.heading_degrees !== null ? `${activeAlert.location.heading_degrees.toFixed(0)}°` : 'N/A'}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div style={{ padding: '0.75rem', background: 'rgba(239, 68, 68, 0.1)', borderRadius: 'var(--radius-sm)', border: '1px dashed rgba(239, 68, 68, 0.3)', fontSize: '0.82rem', color: '#fca5a5' }}>
+                    ⚠️ GPS coordinates unavailable ({locationError || 'Device permission denied or timed out'}). Your silent SOS alert was still broadcast to trusted contacts without coordinates.
+                  </div>
+                )}
+              </div>
+
+              <div className="sos-active-actions">
+                <button
+                  className="btn btn-outline"
+                  onClick={() => setResolveModalOpen(true)}
+                  style={{ borderColor: 'var(--accent-green)', color: 'var(--accent-green)' }}
+                >
+                  ✓ Mark Safe & Resolve Emergency
+                </button>
+              </div>
+            </section>
+          ) : (
+            <section className="sos-trigger-panel">
+              <div className="sos-trigger-header">
+                <div>
+                  <h2 className="sos-trigger-title">
+                    <span>🚨</span>
+                    <span>Silent SOS Distress Activation</span>
+                  </h2>
+                  <p className="sos-trigger-desc">
+                    One-touch discreet activation. Silently acquires GPS coordinates and dispatches alert records to your priority contacts without audible alerts.
+                  </p>
+                </div>
+              </div>
+
+              <div className="sos-btn-wrapper">
+                <button
+                  className="btn-sos-trigger"
+                  onClick={handleTriggerSos}
+                  disabled={sosActivating}
+                >
+                  {sosActivating ? (
+                    <>
+                      <span className="sos-pulse-dot" style={{ backgroundColor: '#fff' }}></span>
+                      <span>Acquiring GPS & Triggering...</span>
+                    </>
+                  ) : (
+                    <>
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+                        <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
+                      </svg>
+                      <span>Trigger Silent SOS</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </section>
+          )}
+
+          {/* Authenticated View: Emergency Contacts Management Dashboard */}
+          <section className="card">
           <div className="card-header">
             <div>
               <div className="card-title">
@@ -627,6 +988,7 @@ export default function App() {
             </div>
           )}
         </section>
+        </>
       )}
 
       {/* Add / Edit Contact Modal */}
@@ -761,6 +1123,66 @@ export default function App() {
                 Confirm Removal
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Step 4: Resolve Emergency Alert Modal */}
+      {resolveModalOpen && activeAlert && (
+        <div className="modal-backdrop" onClick={() => setResolveModalOpen(false)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3 className="modal-title" style={{ color: 'var(--accent-green)' }}>
+                Resolve Emergency Alert
+              </h3>
+              <button
+                className="modal-close-btn"
+                onClick={() => setResolveModalOpen(false)}
+              >
+                ✕
+              </button>
+            </div>
+
+            <p style={{ fontSize: '0.88rem', color: 'var(--text-secondary)', marginBottom: '1.25rem' }}>
+              Confirm that you are safe. This will terminate continuous location tracking and record an immutable resolution audit event.
+            </p>
+
+            <form onSubmit={handleResolveAlert}>
+              <div className="form-group">
+                <label className="form-label" htmlFor="resolve-reason">Resolution Reason / Status *</label>
+                <select
+                  id="resolve-reason"
+                  className="form-input"
+                  value={resolveReason}
+                  onChange={(e) => setResolveReason(e.target.value)}
+                  style={{ backgroundColor: 'var(--bg-secondary)', color: 'var(--text-primary)' }}
+                >
+                  <option value="Safe Arrival / Threat Passed">Safe Arrival / Threat Passed</option>
+                  <option value="Assistance Received">Assistance Received from Responders</option>
+                  <option value="False Alarm / Accidental Trigger">False Alarm / Accidental Trigger</option>
+                  <option value="Other / Situation De-escalated">Other / Situation De-escalated</option>
+                </select>
+              </div>
+
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn btn-outline"
+                  onClick={() => setResolveModalOpen(false)}
+                  disabled={resolveLoading}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  style={{ backgroundColor: 'var(--accent-green)', borderColor: 'var(--accent-green)' }}
+                  disabled={resolveLoading}
+                >
+                  {resolveLoading ? 'Resolving Alert...' : '✓ Confirm & Mark Safe'}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -903,9 +1325,9 @@ export default function App() {
 
       {/* Footer */}
       <footer className="app-footer">
-        <p>Silent SOS Emergency Web App • Step 3: Secure Authentication & Contacts Management</p>
+        <p>Silent SOS Emergency Web App • Step 4: Silent SOS Alert Trigger & Geolocation Tracking</p>
         <p style={{ marginTop: '0.35rem', color: 'var(--text-muted)' }}>
-          Argon2id password hashing • Minimal-claim JWT {`{ sub }`} • Strict tenant ownership isolation
+          Discreet SOS activation • PostGIS coordinate telemetry • Transactional audit logging • Strict multi-tenant isolation
         </p>
       </footer>
     </div>
