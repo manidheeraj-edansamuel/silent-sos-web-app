@@ -17,16 +17,17 @@ This is an emergency-oriented web application and is engineered with strict safe
 
 ## 🏗️ Incremental Development Status
 
-> **Current Phase: Step 3 — Secure Authentication & Emergency Contact Management**
+> **Current Phase: Step 4 — Silent SOS Alert Trigger & Geolocation Tracking (Completed)**
 > 
-> In this phase, secure Argon2id password hashing, minimal-claim JWT authentication (`{ sub: userId }`), authentication rate limiting, current user `/api/v1/auth/me` inspection, and protected emergency contacts CRUD with strict tenant ownership isolation and priority ordering have been implemented across the backend and frontend.
+> In this phase, one-touch silent distress activation with graceful location fallback, cryptographically secure 192-bit tracking token generation with SHA-256 hash storage in PostgreSQL (Migration 009), PostGIS geography coordinate telemetry (`ST_MakePoint`), continuous browser geolocation streaming via `navigator.geolocation.watchPosition`, active alert restoration across sessions, and transactional resolution audit trail logging (`alert_events`) have been implemented and verified with 48 automated tests.
 
-### Completed in Step 1, Step 2 & Step 3
+### Completed in Step 1, Step 2, Step 3 & Step 4
 - [x] Multi-package workspace directory structure (`client/`, `server/`, `database/`, `docs/`)
 - [x] React + Vite frontend with responsive layout and real-time backend health connectivity display
 - [x] Node.js + Express backend skeleton with security headers (`helmet`), CORS configuration, and `/api/v1/health` endpoint
 - [x] PostgreSQL 18.6 & PostGIS 3.6.2 database schema definitions (migrations 001–007)
 - [x] Migration 008: Added `password_hash` and `last_login_at` to `users`
+- [x] Migration 009: Added `tracking_token_hash` to `alerts`
 - [x] Idempotent migration runner (`database/scripts/migrate.js`) with `schema_migrations` tracking
 - [x] Development mock seed runner (`database/scripts/seed.js`) with Argon2id seed password
 - [x] Backend `pg.Pool` connection layer (`server/src/config/database.js`) with graceful error handling
@@ -37,16 +38,21 @@ This is an emergency-oriented web application and is engineered with strict safe
 - [x] Auth REST API (`POST /register`, `POST /login`, `POST /logout`, `GET /me`)
 - [x] Emergency contacts REST API (`GET`, `POST`, `GET :id`, `PUT :id`, `DELETE :id`) with transactional priority management
 - [x] Strict tenant ownership isolation preventing cross-user contact access
-- [x] Modern, responsive frontend authentication & contact management UI
-- [x] Automated unit and integration test suites for Security, Auth, Contacts, and Health
+- [x] Silent SOS Alert Activation (`POST /api/v1/alerts/trigger`) with location fallback
+- [x] PostGIS coordinate breadcrumb telemetry (`POST /api/v1/alerts/:id/location`)
+- [x] Active alert restoration query (`GET /api/v1/alerts/active`)
+- [x] Alert resolution lifecycle with resolution reasons (`POST /api/v1/alerts/:id/resolve`)
+- [x] Audit trail recording (`alert_events`) for triggers, breadcrumbs, and resolutions
+- [x] React client with one-touch SOS distress activation, live pulsing badge, and continuous GPS watcher
+- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, and Alerts (48 passing tests)
 
-### Planned for Future Milestones (Step 4+)
-- ❌ Silent SOS activation triggers & stealth UI — *Step 4*
-- ❌ GPS / Geolocation capture & live tracking — *Step 4*
+### Planned for Future Milestones (Step 5+)
 - ❌ Socket.IO / WebSocket real-time live coordinate streaming — *Step 5*
+- ❌ Recipient public tracking endpoint (`GET /api/v1/alerts/track/:token`) — *Step 5*
 - ❌ Redis caching & BullMQ async notification queues — *Step 5*
 - ❌ SMS (Twilio), Email (SES/SendGrid), and Web Push integrations — *Step 5*
 - ❌ Interactive Leaflet map components & recipient tracking view — *Step 5*
+- ❌ Stealth mode decoy calculator/notes UI & panic hotkeys — *Step 6*
 
 ---
 
@@ -57,7 +63,7 @@ silent-sos_web_app/
 ├── client/                     # Frontend Application (React + Vite)
 │   ├── public/                 # Static web assets
 │   ├── src/
-│   │   ├── App.jsx             # Root UI with health status monitor
+│   │   ├── App.jsx             # Root UI with SOS trigger, contacts & auth
 │   │   ├── main.jsx            # Application entry point
 │   │   └── index.css           # Core styling tokens & dark theme
 │   ├── index.html
@@ -69,25 +75,39 @@ silent-sos_web_app/
 │   │   ├── config/
 │   │   │   └── database.js     # PostgreSQL connection pool & health checker
 │   │   ├── routes/
-│   │   │   └── health.js       # Health check route (/api/v1/health)
+│   │   │   ├── health.js       # Health check route (/api/v1/health)
+│   │   │   ├── auth.js         # Authentication routes (/api/v1/auth)
+│   │   │   ├── contacts.js     # Emergency contacts routes (/api/v1/contacts)
+│   │   │   └── alerts.js       # SOS emergency alerts routes (/api/v1/alerts)
 │   │   ├── middleware/
+│   │   │   ├── auth.js         # JWT auth middleware
+│   │   │   ├── rateLimiter.js  # Brute-force rate limiting
 │   │   │   └── errorHandler.js # Global error handler
+│   │   ├── services/
+│   │   │   ├── passwordService.js # Argon2id password hashing
+│   │   │   └── tokenService.js    # JWT generation & verification
 │   │   ├── app.js              # Express app setup & middleware
 │   │   └── server.js           # Server bootstrap & port listener
 │   ├── tests/
 │   │   ├── health.test.js      # Automated health endpoint test
-│   │   └── database.test.js    # Automated database & PostGIS schema test
+│   │   ├── database.test.js    # Automated database & PostGIS schema test
+│   │   ├── security.test.js    # Argon2id & JWT security tests
+│   │   ├── auth.test.js        # Authentication endpoints test
+│   │   ├── contacts.test.js    # Emergency contacts test
+│   │   └── alerts.test.js      # Emergency alerts & location test
 │   ├── package.json
 │   └── .env.example
 ├── database/                   # Database Architecture (PostgreSQL + PostGIS)
-│   ├── migrations/             # Deterministic SQL migration files (001 - 007)
+│   ├── migrations/             # Deterministic SQL migration files (001 - 009)
 │   │   ├── 001_enable_extensions.sql
 │   │   ├── 002_create_users.sql
 │   │   ├── 003_create_emergency_contacts.sql
 │   │   ├── 004_create_alerts.sql
 │   │   ├── 005_create_alert_locations.sql
 │   │   ├── 006_create_alert_events.sql
-│   │   └── 007_create_notification_attempts.sql
+│   │   ├── 007_create_notification_attempts.sql
+│   │   ├── 008_add_user_authentication.sql
+│   │   └── 009_add_tracking_token_to_alerts.sql
 │   ├── seeds/
 │   │   └── 001_dev_seed.sql    # Development mock baseline data
 │   ├── scripts/
