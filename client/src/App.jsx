@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import RecipientTrackingMap from './components/RecipientTrackingMap.jsx';
 
 export default function App() {
   // Authentication & Session State
@@ -47,6 +48,13 @@ export default function App() {
   const [healthStatus, setHealthStatus] = useState('loading'); // 'loading' | 'connected' | 'unavailable'
   const [lastChecked, setLastChecked] = useState(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+
+  // Step 5C: Recipient Tracking Portal via ?track=<token> URL parameter
+  const [trackingToken] = useState(() => {
+    const params = new URLSearchParams(window.location.search);
+    const track = params.get('track');
+    return track && track.trim() ? track.trim() : null;
+  });
 
   const showAlert = (message, type = 'success') => {
     setAlertFeedback({ message, type });
@@ -560,6 +568,19 @@ export default function App() {
       desc: 'Socket.IO live coordinate stream, BullMQ queues, SMS/Email delivery.',
     },
   ];
+
+  // Step 5C: Recipient tracking links (?track=<token>) render the public portal
+  // and bypass the authenticated app shell entirely
+  if (trackingToken) {
+    return (
+      <RecipientTrackingMap
+        token={trackingToken}
+        onBackToApp={() => {
+          window.location.href = window.location.pathname;
+        }}
+      />
+    );
+  }
 
   return (
     <div className="app-container">
