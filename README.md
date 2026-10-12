@@ -17,11 +17,11 @@ This is an emergency-oriented web application and is engineered with strict safe
 
 ## 🏗️ Incremental Development Status
 
-> **Current Phase: Step 4 — Silent SOS Alert Trigger & Geolocation Tracking (Completed)**
+> **Current Phase: Step 5B — Real-Time Location Gateway using Socket.IO (Completed)**
 > 
-> In this phase, one-touch silent distress activation with graceful location fallback, cryptographically secure 192-bit tracking token generation with SHA-256 hash storage in PostgreSQL (Migration 009), PostGIS geography coordinate telemetry (`ST_MakePoint`), continuous browser geolocation streaming via `navigator.geolocation.watchPosition`, active alert restoration across sessions, and transactional resolution audit trail logging (`alert_events`) have been implemented and verified with 48 automated tests.
+> In this phase, a bidirectional real-time WebSocket gateway was engineered using Socket.IO (`/socket.io`) and verified with 72 automated tests across 9 test suites. Authorized recipients subscribe to isolated alert rooms (`alert:<id>`) authenticated strictly via SHA-256 tracking token verification. Real-time GPS coordinate breadcrumbs and alert resolution events are broadcast exclusively to verified room subscribers immediately after database transactions commit, preventing global broadcasting or uncommitted leaks. Disconnection/reconnection resilience and anti-spoofing controls ensure cross-alert tenant isolation.
 
-### Completed in Step 1, Step 2, Step 3 & Step 4
+### Completed in Steps 1–5B
 - [x] Multi-package workspace directory structure (`client/`, `server/`, `database/`, `docs/`)
 - [x] React + Vite frontend with responsive layout and real-time backend health connectivity display
 - [x] Node.js + Express backend skeleton with security headers (`helmet`), CORS configuration, and `/api/v1/health` endpoint
@@ -43,16 +43,19 @@ This is an emergency-oriented web application and is engineered with strict safe
 - [x] Active alert restoration query (`GET /api/v1/alerts/active`)
 - [x] Alert resolution lifecycle with resolution reasons (`POST /api/v1/alerts/:id/resolve`)
 - [x] Audit trail recording (`alert_events`) for triggers, breadcrumbs, and resolutions
-- [x] React client with one-touch SOS distress activation, live pulsing badge, and continuous GPS watcher
-- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, and Alerts (48 passing tests)
+- [x] Public Recipient Tracking REST API (`GET /api/v1/alerts/track/:token`) via SHA-256 token lookup
+- [x] Public tracking rate limiting (`trackingRateLimiter`, 60 req/15 min)
+- [x] Strict recipient privacy model (omits user IDs, token hashes, credentials, contact phones/emails)
+- [x] Chronological GPS coordinate history and 24-hour safety expiration window for resolved alerts
+- [x] Socket.IO Real-Time Gateway (`/socket.io`) with cryptographic token room subscriptions
+- [x] Isolated alert rooms (`alert:<id>`) with zero global broadcasting
+- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, and Socket.IO (72 passing tests)
 
-### Planned for Future Milestones (Step 5+)
-- ❌ Socket.IO / WebSocket real-time live coordinate streaming — *Step 5*
-- ❌ Recipient public tracking endpoint (`GET /api/v1/alerts/track/:token`) — *Step 5*
-- ❌ Redis caching & BullMQ async notification queues — *Step 5*
-- ❌ SMS (Twilio), Email (SES/SendGrid), and Web Push integrations — *Step 5*
-- ❌ Interactive Leaflet map components & recipient tracking view — *Step 5*
-- ❌ Stealth mode decoy calculator/notes UI & panic hotkeys — *Step 6*
+### Planned for Future Milestones (Step 5C+)
+- ❌ Step 5C: Interactive Leaflet map recipient tracking portal — *Step 5C*
+- ❌ Step 5C: Redis caching & BullMQ async notification queues — *Step 5C*
+- ❌ Step 5C: SMS (Twilio), Email (SES/SendGrid), and Web Push integrations — *Step 5C*
+- ❌ Step 6: Stealth mode decoy calculator/notes UI & panic hotkeys — *Step 6*
 
 ---
 
@@ -85,16 +88,18 @@ silent-sos_web_app/
 │   │   │   └── errorHandler.js # Global error handler
 │   │   ├── services/
 │   │   │   ├── passwordService.js # Argon2id password hashing
-│   │   │   └── tokenService.js    # JWT generation & verification
+│   │   │   ├── tokenService.js    # JWT generation & verification
+│   │   │   └── socketService.js   # Socket.IO real-time location gateway
 │   │   ├── app.js              # Express app setup & middleware
-│   │   └── server.js           # Server bootstrap & port listener
+│   │   └── server.js           # HTTP & Socket.IO server bootstrap
 │   ├── tests/
 │   │   ├── health.test.js      # Automated health endpoint test
 │   │   ├── database.test.js    # Automated database & PostGIS schema test
 │   │   ├── security.test.js    # Argon2id & JWT security tests
 │   │   ├── auth.test.js        # Authentication endpoints test
 │   │   ├── contacts.test.js    # Emergency contacts test
-│   │   └── alerts.test.js      # Emergency alerts & location test
+│   │   ├── alerts.test.js      # Emergency alerts & location test
+│   │   └── socket.test.js      # Real-time Socket.IO gateway tests
 │   ├── package.json
 │   └── .env.example
 ├── database/                   # Database Architecture (PostgreSQL + PostGIS)

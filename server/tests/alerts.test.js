@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import crypto from 'node:crypto';
 import request from 'supertest';
 import app from '../src/app.js';
-import { query, checkDbHealth, closePool } from '../src/config/database.js';
+import { query, checkDbHealth, closePool, getPool } from '../src/config/database.js';
 
 describe('Emergency SOS Alerts API Tests (/api/v1/alerts)', () => {
   let dbAvailable = false;
@@ -337,6 +337,295 @@ describe('Emergency SOS Alerts API Tests (/api/v1/alerts)', () => {
     for (const row of eventsRes.rows) {
       const dataStr = JSON.stringify(row.event_data);
       assert.equal(dataStr.includes(alertARawToken), false);
+    }
+  });
+
+  // ==============================================================================
+  // Step 5A: Public Recipient Tracking API Tests (GET /api/v1/alerts/track/:token)
+  // ==============================================================================
+
+  let alertBId = '';
+  let alertBRawToken = '';
+  let alertNoLocToken = '';
+
+  test('14. Setup: User B triggers active alert with GPS coordinates', async () => {
+    const res = await request(app)
+      .post('/api/v1/alerts/trigger')
+      .set('Authorization', `Bearer ${userBToken}`)
+      .send({
+        trigger_source: 'manual_ui',
+        location: {
+          latitude: 37.7800,
+          longitude: -122.4100,
+          accuracy_meters: 6.0,
+          speed_mps: 1.5,
+        },
+      })
+      .expect(201);
+
+    assert.equal(res.body.status, 'ok');
+    alertBId = res.body.data.alert.id;
+    alertBRawToken = res.body.data.alert.tracking_token;
+    assert.ok(alertBId);
+    assert.ok(alertBRawToken);
+  });
+
+  test('15. Valid tracking token returns correct alert without requiring authentication', async () => {
+    // Note: No Authorization header passed - public recipient access!
+    const res = await request(app)
+      .get(`/api/v1/alerts/track/${alertBRawToken}`)
+      .expect(200);
+
+    assert.equal(res.body.status, 'ok');
+    assert.ok(res.body.data.alert);
+    const alert = res.body.data.alert;
+    assert.equal(alert.id, alertBId);
+    assert.equal(alert.status, 'active');
+    assert.equal(alert.victim_name, 'Alert Test User Beta');
+    assert.ok(alert.triggered_at);
+    assert.equal(alert.resolved_at, null);
+    assert.ok(alert.current_location);
+    assert.equal(Math.round(alert.current_location.latitude * 100) / 100, 37.78);
+    assert.equal(Math.round(alert.current_location.longitude * 100) / 100, -122.41);
+    assert.equal(alert.current_location.accuracy_meters, 6.0);
+    assert.equal(Array.isArray(alert.locations), true);
+    assert.equal(alert.locations.length, 1);
+  });
+
+  test('16. SHA-256 hashing occurs before database lookup', async () => {
+    // 1. Raw unhashed token succeeds
+    await request(app).get(`/api/v1/alerts/track/${alertBRawToken}`).expect(200);
+
+    // 2. Querying with the computed hex hash directly must return 404
+    // Because SHA256(hexHash) != hexHash, proving raw parameter is hashed on the server
+    const directHexHash = crypto.createHash('sha256').update(alertBRawToken).digest('hex');
+    const res = await request(app)
+      .get(`/api/v1/alerts/track/${directHexHash}`)
+      .expect(404);
+
+    assert.equal(res.body.status, 'error');
+    assert.match(res.body.message, /not found or link has expired/i);
+  });
+
+  test('17. Correct GPS breadcrumb history is returned in chronological order', async () => {
+    // Push second location breadcrumb
+    await request(app)
+      .post(`/api/v1/alerts/${alertBId}/location`)
+      .set('Authorization', `Bearer ${userBToken}`)
+      .send({
+        latitude: 37.7810,
+        longitude: -122.4110,
+        accuracy_meters: 4.5,
+        speed_mps: 2.0,
+      })
+      .expect(200);
+
+    // Push third location breadcrumb
+    await request(app)
+      .post(`/api/v1/alerts/${alertBId}/location`)
+      .set('Authorization', `Bearer ${userBToken}`)
+      .send({
+        latitude: 37.7820,
+        longitude: -122.4120,
+        accuracy_meters: 3.0,
+        speed_mps: 2.8,
+      })
+      .expect(200);
+
+    const res = await request(app)
+      .get(`/api/v1/alerts/track/${alertBRawToken}`)
+      .expect(200);
+
+    const { alert } = res.body.data;
+    assert.equal(alert.locations.length, 3);
+
+    // Verify chronological order: logged_at should be ascending
+    for (let i = 1; i < alert.locations.length; i++) {
+      const prevTime = new Date(alert.locations[i - 1].logged_at).getTime();
+      const currTime = new Date(alert.locations[i].logged_at).getTime();
+      assert.ok(currTime >= prevTime, `Location ${i} timestamp must be >= location ${i - 1}`);
+    }
+
+    // current_location matches the final breadcrumb
+    const lastLoc = alert.locations[alert.locations.length - 1];
+    assert.equal(alert.current_location.id, lastLoc.id);
+    assert.equal(Math.round(alert.current_location.latitude * 1000) / 1000, 37.782);
+  });
+
+  test('18. Malformed tokens are rejected safely with 400 Bad Request', async () => {
+    // Too short (< 16 chars)
+    const shortRes = await request(app)
+      .get('/api/v1/alerts/track/short')
+      .expect(400);
+    assert.equal(shortRes.body.status, 'error');
+    assert.match(shortRes.body.message, /Invalid tracking token format/i);
+
+    // Illegal characters
+    const invalidCharRes = await request(app)
+      .get('/api/v1/alerts/track/invalid!@#$%^&*()_+~')
+      .expect(400);
+    assert.equal(invalidCharRes.body.status, 'error');
+    assert.match(invalidCharRes.body.message, /Invalid tracking token format/i);
+
+    // Whitespace embedded
+    const spaceRes = await request(app)
+      .get('/api/v1/alerts/track/validlengthbuthas%20spaces123')
+      .expect(400);
+    assert.equal(spaceRes.body.status, 'error');
+    assert.match(spaceRes.body.message, /Invalid tracking token format/i);
+  });
+
+  test('19. Unknown tokens are rejected safely with 404 Not Found', async () => {
+    // Valid format (32 base64url characters) but non-existent
+    const unknownToken = crypto.randomBytes(24).toString('base64url');
+    const res = await request(app)
+      .get(`/api/v1/alerts/track/${unknownToken}`)
+      .expect(404);
+
+    assert.equal(res.body.status, 'error');
+    assert.match(res.body.message, /not found or link has expired/i);
+  });
+
+  test('20. Sensitive database fields are never returned in public response', async () => {
+    const res = await request(app)
+      .get(`/api/v1/alerts/track/${alertBRawToken}`)
+      .expect(200);
+
+    const alert = res.body.data.alert;
+
+    // Direct property assertions
+    assert.equal(alert.user_id, undefined);
+    assert.equal(alert.tracking_token_hash, undefined);
+    assert.equal(alert.tracking_token, undefined);
+    assert.equal(alert.token, undefined);
+    assert.equal(alert.password_hash, undefined);
+    assert.equal(alert.password, undefined);
+    assert.equal(alert.email, undefined);
+    assert.equal(alert.phone_number, undefined);
+
+    // Raw body inspection ensuring no internal IDs or passwords leak
+    const rawBody = res.text;
+    assert.equal(rawBody.includes(userBId), false);
+    assert.equal(rawBody.includes('password'), false);
+    assert.equal(rawBody.includes('BetaPassword123'), false);
+    assert.equal(rawBody.includes('example.local'), false);
+  });
+
+  test('21. One alert token cannot expose another alert (Isolation)', async () => {
+    const resA = await request(app)
+      .get(`/api/v1/alerts/track/${alertARawToken}`)
+      .expect(200);
+
+    const resB = await request(app)
+      .get(`/api/v1/alerts/track/${alertBRawToken}`)
+      .expect(200);
+
+    assert.equal(resA.body.data.alert.id, alertAId);
+    assert.equal(resA.body.data.alert.victim_name, 'Alert Test User Alpha');
+
+    assert.equal(resB.body.data.alert.id, alertBId);
+    assert.equal(resB.body.data.alert.victim_name, 'Alert Test User Beta');
+
+    assert.notEqual(resA.body.data.alert.id, resB.body.data.alert.id);
+  });
+
+  test('22. Resolved-alert behavior matches documented safety policy', async () => {
+    // 1. Alert A was resolved in test 11 (within 24h window) -> Accessible with status resolved
+    const activeResolvedRes = await request(app)
+      .get(`/api/v1/alerts/track/${alertARawToken}`)
+      .expect(200);
+
+    assert.equal(activeResolvedRes.body.status, 'ok');
+    assert.equal(activeResolvedRes.body.data.alert.status, 'resolved');
+    assert.ok(activeResolvedRes.body.data.alert.resolved_at);
+
+    // 2. Alert resolved beyond safety window (>24 hours) -> Expired, returns 404
+    await query(
+      `UPDATE alerts SET resolved_at = NOW() - INTERVAL '25 hours' WHERE id = $1;`,
+      [alertAId]
+    );
+
+    const expiredRes = await request(app)
+      .get(`/api/v1/alerts/track/${alertARawToken}`)
+      .expect(404);
+
+    assert.equal(expiredRes.body.status, 'error');
+    assert.match(expiredRes.body.message, /not found or link has expired/i);
+
+    // Restore resolved_at for cleanup consistency
+    await query(
+      `UPDATE alerts SET resolved_at = NOW() WHERE id = $1;`,
+      [alertAId]
+    );
+  });
+
+  test('23. Empty or missing location history is handled gracefully', async () => {
+    // Trigger alert without location
+    const trigRes = await request(app)
+      .post('/api/v1/alerts/trigger')
+      .set('Authorization', `Bearer ${userAToken}`)
+      .send({
+        trigger_source: 'manual_ui',
+        location: null,
+        location_error: 'PERMISSION_DENIED',
+      })
+      .expect(201);
+
+    alertNoLocToken = trigRes.body.data.alert.tracking_token;
+
+    const res = await request(app)
+      .get(`/api/v1/alerts/track/${alertNoLocToken}`)
+      .expect(200);
+
+    assert.equal(res.body.status, 'ok');
+    const { alert } = res.body.data;
+    assert.equal(alert.current_location, null);
+    assert.equal(Array.isArray(alert.locations), true);
+    assert.equal(alert.locations.length, 0);
+  });
+
+  test('24. Missing optional GPS accuracy is handled correctly', async () => {
+    // Push location without accuracy_meters
+    const res = await request(app)
+      .post(`/api/v1/alerts/${alertBId}/location`)
+      .set('Authorization', `Bearer ${userBToken}`)
+      .send({
+        latitude: 37.7850,
+        longitude: -122.4150,
+      })
+      .expect(200);
+
+    assert.equal(res.body.data.location.accuracy_meters, null);
+
+    const trackRes = await request(app)
+      .get(`/api/v1/alerts/track/${alertBRawToken}`)
+      .expect(200);
+
+    const latest = trackRes.body.data.alert.current_location;
+    assert.equal(latest.accuracy_meters, null);
+  });
+
+  test('25. Database failures produce safe error response', async () => {
+    const poolInstance = getPool();
+    const originalQuery = poolInstance.query;
+
+    // Simulate unexpected database error during tracking lookup
+    poolInstance.query = async function (text, params) {
+      if (typeof text === 'string' && text.includes('tracking_token_hash = $1')) {
+        throw new Error('Simulated PostgreSQL socket error');
+      }
+      return originalQuery.apply(poolInstance, arguments);
+    };
+
+    try {
+      const res = await request(app)
+        .get(`/api/v1/alerts/track/${alertBRawToken}`)
+        .expect(500);
+
+      assert.equal(res.body.status, 'error');
+      assert.ok(res.body.message);
+    } finally {
+      poolInstance.query = originalQuery;
     }
   });
 });

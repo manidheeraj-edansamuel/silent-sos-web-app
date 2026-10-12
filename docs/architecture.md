@@ -65,11 +65,10 @@ The **Silent SOS Emergency Web App** provides a covert, fast, and reliable mecha
 - Active alert restoration across page refreshes (`GET /api/v1/alerts/active`)
 - Alert resolution lifecycle with resolution reason and immutable audit trail logging (`alert_events`)
 
-### Phase 5: Real-time Streaming & Notification Queues (Future Milestone)
-- Socket.IO gateway for real-time bidirectional coordinate streaming
-- BullMQ asynchronous worker pipeline backed by Redis
-- Multi-channel notification delivery (SMS via Twilio, Email via SES/SendGrid)
-- Dedicated secure tracking view for emergency contacts with Leaflet maps
+### Phase 5: Real-time Streaming, Recipient Tracking & Notification Queues
+- **Step 5A (Completed):** Public Recipient Tracking REST API (`GET /api/v1/alerts/track/:token`) with SHA-256 token lookup, rate limiting, strict privacy guarantees, chronological PostGIS coordinate breadcrumbs, and 24-hour resolved safety window.
+- **Step 5B (Completed):** Socket.IO real-time bidirectional location telemetry and status gateway (`ws://.../socket.io`) with cryptographic token-authenticated room subscriptions (`alert:<id>`), zero global coordinate broadcasts, and automated disconnect/reconnect resilience.
+- **Step 5C (Future Milestone):** Interactive Leaflet map recipient tracking portal and BullMQ asynchronous worker pipeline backed by Redis for multi-channel SMS/Email emergency dispatch.
 
 ### Phase 6: PWA, Offline Capabilities & Stealth Mode (Future Milestone)
 - Service worker caching, offline capability, installability

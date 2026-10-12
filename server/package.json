@@ -22,9 +22,11 @@
     "helmet": "^8.0.0",
     "jsonwebtoken": "^9.0.3",
     "morgan": "^1.10.0",
-    "pg": "^8.13.3"
+    "pg": "^8.13.3",
+    "socket.io": "^4.8.4"
   },
   "devDependencies": {
+    "socket.io-client": "^4.8.4",
     "supertest": "^7.0.0"
   }
 }

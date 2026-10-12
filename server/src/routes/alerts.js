@@ -10,13 +10,151 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { getClient, query } from '../config/database.js';
 import { authenticateToken } from '../middleware/auth.js';
+import { trackingRateLimiter } from '../middleware/rateLimiter.js';
+import { emitLocationUpdate, emitStatusUpdate } from '../services/socketService.js';
 
 const router = Router();
 
 // UUID format validation regex
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
-// All alert endpoints strictly require authentication
+// Tracking token validation regex (high-entropy base64url string, 16-128 chars)
+const TRACKING_TOKEN_REGEX = /^[A-Za-z0-9_-]{16,128}$/;
+
+/**
+ * GET /api/v1/alerts/track/:token
+ * Public recipient emergency tracking endpoint.
+ *
+ * Security & Privacy:
+ * - Public endpoint accessed by trusted emergency recipients via unguessable tracking links.
+ * - Raw token is validated, then hashed with SHA-256 before looking up the record in PostgreSQL.
+ * - Raw tokens or token hashes are NEVER stored, logged, or returned in responses.
+ * - Sensitive user data (user_id, email, phone_number, password_hash) is strictly excluded.
+ * - Only permitted victim display name (users.full_name) and public alert state are exposed.
+ * - Returns historical GPS breadcrumb coordinates in ascending chronological order (logged_at ASC).
+ * - Expiration policy: Active alerts are fully trackable; resolved/false_alarm alerts remain accessible
+ *   for a configurable safety window (default 24h) so responders can confirm safe arrival,
+ *   after which the link safely expires with 404 Not Found.
+ */
+router.get('/track/:token', trackingRateLimiter, async (req, res, next) => {
+  try {
+    const { token } = req.params;
+
+    // 1. Defensively validate token format and length
+    if (!token || typeof token !== 'string' || !TRACKING_TOKEN_REGEX.test(token)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation error: Invalid tracking token format.',
+      });
+    }
+
+    // 2. Compute SHA-256 hash of the supplied raw token
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+
+    // 3. Look up alert and permitted victim display name via parameterized query on indexed tracking_token_hash
+    const alertResult = await query(
+      `SELECT
+         a.id,
+         a.status,
+         a.triggered_at,
+         a.acknowledged_at,
+         a.resolved_at,
+         a.created_at,
+         a.updated_at,
+         u.full_name AS victim_name
+       FROM alerts a
+       JOIN users u ON a.user_id = u.id
+       WHERE a.tracking_token_hash = $1;`,
+      [tokenHash]
+    );
+
+    if (alertResult.rowCount === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Emergency tracking session not found or link has expired.',
+      });
+    }
+
+    const alertRow = alertResult.rows[0];
+
+    // 4. Enforce expiration policy for resolved alerts (default 24-hour safety window)
+    if (alertRow.status === 'resolved' || alertRow.status === 'false_alarm') {
+      const windowHours = parseFloat(process.env.TRACKING_RESOLVED_WINDOW_HOURS || '24');
+      const resolvedTimestamp = new Date(alertRow.resolved_at || alertRow.updated_at).getTime();
+      const now = Date.now();
+      if (now - resolvedTimestamp > windowHours * 60 * 60 * 1000) {
+        return res.status(404).json({
+          status: 'error',
+          message: 'Emergency tracking session not found or link has expired.',
+        });
+      }
+    }
+
+    // 5. Query historical GPS coordinate breadcrumbs in chronological order
+    const locationResult = await query(
+      `SELECT
+         id,
+         ST_Y(location::geometry) AS latitude,
+         ST_X(location::geometry) AS longitude,
+         accuracy_meters,
+         altitude_meters,
+         heading_degrees,
+         speed_mps,
+         logged_at
+       FROM alert_locations
+       WHERE alert_id = $1
+       ORDER BY logged_at ASC;`,
+      [alertRow.id]
+    );
+
+    // 6. Format location list safely
+    const locations = locationResult.rows.map((row) => ({
+      id: row.id,
+      latitude: parseFloat(row.latitude),
+      longitude: parseFloat(row.longitude),
+      accuracy_meters:
+        row.accuracy_meters !== null && row.accuracy_meters !== undefined
+          ? parseFloat(row.accuracy_meters)
+          : null,
+      altitude_meters:
+        row.altitude_meters !== null && row.altitude_meters !== undefined
+          ? parseFloat(row.altitude_meters)
+          : null,
+      heading_degrees:
+        row.heading_degrees !== null && row.heading_degrees !== undefined
+          ? parseFloat(row.heading_degrees)
+          : null,
+      speed_mps:
+        row.speed_mps !== null && row.speed_mps !== undefined
+          ? parseFloat(row.speed_mps)
+          : null,
+      logged_at: row.logged_at,
+    }));
+
+    const currentLocation = locations.length > 0 ? locations[locations.length - 1] : null;
+
+    // 7. Return privacy-hardened public tracking payload
+    return res.status(200).json({
+      status: 'ok',
+      data: {
+        alert: {
+          id: alertRow.id,
+          status: alertRow.status,
+          victim_name: alertRow.victim_name,
+          triggered_at: alertRow.triggered_at,
+          acknowledged_at: alertRow.acknowledged_at,
+          resolved_at: alertRow.resolved_at,
+          current_location: currentLocation,
+          locations: locations,
+        },
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// All subsequent alert endpoints strictly require authentication
 router.use(authenticateToken);
 
 /**
@@ -379,6 +517,18 @@ router.post('/:id/location', async (req, res, next) => {
       logged_at: locRow.logged_at,
     };
 
+    // Emit real-time location telemetry to verified recipient room AFTER commit succeeds
+    emitLocationUpdate(alertId, {
+      status: alert.status,
+      latitude: locationData.latitude,
+      longitude: locationData.longitude,
+      accuracy_meters: locationData.accuracy_meters,
+      altitude_meters: locationData.altitude_meters,
+      heading_degrees: locationData.heading_degrees,
+      speed_mps: locationData.speed_mps,
+      logged_at: locationData.logged_at,
+    });
+
     return res.status(200).json({
       status: 'ok',
       message: 'Location breadcrumb recorded successfully.',
@@ -468,6 +618,12 @@ router.post('/:id/resolve', async (req, res, next) => {
     );
 
     await client.query('COMMIT');
+
+    // Emit real-time resolution update to verified recipient room AFTER commit succeeds
+    emitStatusUpdate(alertId, {
+      status: 'resolved',
+      resolved_at: resolvedAlert.resolved_at,
+    });
 
     return res.status(200).json({
       status: 'ok',
