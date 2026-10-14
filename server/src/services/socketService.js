@@ -64,9 +64,17 @@ export function initSocketServer(httpServer) {
     return ioInstance;
   }
 
-  const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
-    .split(',')
-    .map((origin) => origin.trim());
+  // Allow the configured origins plus the server's own origin(s) so that a
+  // same-origin production deployment (client served by this Express server)
+  // can complete the WebSocket handshake, which always sends an Origin header.
+  const serverPort = parseInt(process.env.PORT, 10) || 5000;
+  const allowedOrigins = [
+    ...(process.env.CORS_ORIGIN || 'http://localhost:5173').split(','),
+    `http://localhost:${serverPort}`,
+    `http://127.0.0.1:${serverPort}`,
+  ]
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
   ioInstance = new Server(httpServer, {
     cors: {

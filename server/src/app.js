@@ -3,6 +3,9 @@ import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
 import dotenv from 'dotenv';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import healthRouter from './routes/health.js';
 import authRouter from './routes/auth.js';
 import contactsRouter from './routes/contacts.js';
@@ -12,15 +15,48 @@ import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
 // Load environment variables
 dotenv.config();
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const clientDistPath = path.resolve(__dirname, '../../client/dist');
+
 const app = express();
 
 // Security middleware - Helmet
-app.use(helmet());
+// CSP relaxed for Leaflet OpenStreetMap tiles and same-origin Socket.IO WebSockets
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+        'img-src': ["'self'", 'data:', 'https://*.tile.openstreetmap.org'],
+        'connect-src': ["'self'", 'ws:', 'wss:'],
+      },
+    },
+  })
+);
+
+// Serve the production client build when present (single-service local deployment).
+// Registered before CORS: static assets and the SPA shell are public same-origin
+// files and must not be subject to the API's cross-origin policy.
+if (fs.existsSync(clientDistPath)) {
+  app.use(express.static(clientDistPath));
+
+  // SPA fallback for non-API routes (e.g. recipient tracking portal query URLs)
+  app.get(/^(?!\/api\/).*/, (req, res) => {
+    res.sendFile(path.join(clientDistPath, 'index.html'));
+  });
+}
 
 // CORS configuration
-const allowedOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
-  .split(',')
-  .map((origin) => origin.trim());
+// Includes the server's own origin(s) so a same-origin production deployment
+// (client served by this Express server) passes same-origin POST/WebSocket checks.
+const serverPort = parseInt(process.env.PORT, 10) || 5000;
+const allowedOrigins = [
+  ...(process.env.CORS_ORIGIN || 'http://localhost:5173').split(','),
+  `http://localhost:${serverPort}`,
+  `http://127.0.0.1:${serverPort}`,
+]
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 
 app.use(
   cors({
