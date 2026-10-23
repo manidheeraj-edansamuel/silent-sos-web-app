@@ -1,15 +1,17 @@
 import { Router } from 'express';
 import { checkDbHealth } from '../config/database.js';
+import { getQueueStatus } from '../services/queueService.js';
 
 const router = Router();
 
 /**
  * GET /api/v1/health
  * Public health check and diagnostic endpoint
- * Inspects both API service health and PostgreSQL database connectivity.
+ * Inspects API service health, PostgreSQL connectivity, and dispatch queue depth.
  */
 router.get('/', async (req, res) => {
   const dbHealth = await checkDbHealth();
+  const queueStatus = await getQueueStatus();
   const isHealthy = dbHealth.isHealthy;
 
   const payload = {
@@ -22,6 +24,7 @@ router.get('/', async (req, res) => {
     services: {
       api: 'ok',
       database: isHealthy ? 'ok' : 'unavailable',
+      queue: queueStatus.available ? 'ok' : 'unavailable',
     },
   };
 
@@ -30,6 +33,15 @@ router.get('/', async (req, res) => {
     payload.databaseLatencyMs = dbHealth.latencyMs;
   } else if (!isHealthy && process.env.NODE_ENV !== 'production' && dbHealth.error) {
     payload.databaseError = dbHealth.error;
+  }
+
+  if (queueStatus.available) {
+    payload.queue = {
+      queued: queueStatus.queued,
+      ready: queueStatus.ready,
+      active: queueStatus.active,
+      failed: queueStatus.failed,
+    };
   }
 
   const statusCode = isHealthy ? 200 : 503;

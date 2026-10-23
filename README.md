@@ -17,11 +17,11 @@ This is an emergency-oriented web application and is engineered with strict safe
 
 ## 🏗️ Incremental Development Status
 
-> **Current Phase: Step 5B — Real-Time Location Gateway using Socket.IO (Completed)**
+> **Current Phase: Step 5C — Live Recipient Map Portal & Asynchronous Dispatch Queue (Completed)**
 > 
-> In this phase, a bidirectional real-time WebSocket gateway was engineered using Socket.IO (`/socket.io`) and verified with 72 automated tests across 9 test suites. Authorized recipients subscribe to isolated alert rooms (`alert:<id>`) authenticated strictly via SHA-256 tracking token verification. Real-time GPS coordinate breadcrumbs and alert resolution events are broadcast exclusively to verified room subscribers immediately after database transactions commit, preventing global broadcasting or uncommitted leaks. Disconnection/reconnection resilience and anti-spoofing controls ensure cross-alert tenant isolation.
+> Step 5C delivers the interactive Leaflet + OpenStreetMap recipient tracking portal (`/?track=<token>`) with live Socket.IO telemetry, and a Postgres-backed asynchronous dispatch queue using pg-boss. SOS triggers enqueue an `alert.dispatch` job after commit; the worker records delivery attempts and notifies connected recipients without blocking the trigger request. Jobs retry with exponential backoff (5 attempts). The queue is verified with 4 dedicated integration tests, bringing the suite to 76 tests across 10 suites. The production client build is served directly by Express for single-service local deployment.
 
-### Completed in Steps 1–5B
+### Completed in Steps 1–5C
 - [x] Multi-package workspace directory structure (`client/`, `server/`, `database/`, `docs/`)
 - [x] React + Vite frontend with responsive layout and real-time backend health connectivity display
 - [x] Node.js + Express backend skeleton with security headers (`helmet`), CORS configuration, and `/api/v1/health` endpoint
@@ -49,12 +49,16 @@ This is an emergency-oriented web application and is engineered with strict safe
 - [x] Chronological GPS coordinate history and 24-hour safety expiration window for resolved alerts
 - [x] Socket.IO Real-Time Gateway (`/socket.io`) with cryptographic token room subscriptions
 - [x] Isolated alert rooms (`alert:<id>`) with zero global broadcasting
-- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, and Socket.IO (72 passing tests)
+- [x] Interactive Leaflet recipient tracking portal (`/?track=<token>`) with live breadcrumbs, accuracy circles, and resolution handling
+- [x] pg-boss asynchronous dispatch queue (`alert.dispatch`) with retry/backoff and post-commit enqueueing
+- [x] `notification_dispatched` delivery-attempt audit events written by the queue worker
+- [x] Queue depth reporting in `/api/v1/health` and graceful queue shutdown
+- [x] Single-service production deployment (Express serves `client/dist` with SPA fallback and CSP for map tiles/WebSockets)
+- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, Socket.IO, and Dispatch Queue (76 passing tests)
 
-### Planned for Future Milestones (Step 5C+)
-- ❌ Step 5C: Interactive Leaflet map recipient tracking portal — *Step 5C*
-- ❌ Step 5C: Redis caching & BullMQ async notification queues — *Step 5C*
-- ❌ Step 5C: SMS (Twilio), Email (SES/SendGrid), and Web Push integrations — *Step 5C*
+### Planned for Future Milestones (Phase C+)
+- ❌ Phase C: Multi-channel notification delivery — Email (SMTP), SMS (Twilio), and Web Push integrations
+- ❌ Phase C: Recipient notification preferences and delivery receipts UI
 - ❌ Step 6: Stealth mode decoy calculator/notes UI & panic hotkeys — *Step 6*
 
 ---

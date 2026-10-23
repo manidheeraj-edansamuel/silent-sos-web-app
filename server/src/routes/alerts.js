@@ -12,6 +12,7 @@ import { getClient, query } from '../config/database.js';
 import { authenticateToken } from '../middleware/auth.js';
 import { trackingRateLimiter } from '../middleware/rateLimiter.js';
 import { emitLocationUpdate, emitStatusUpdate } from '../services/socketService.js';
+import { enqueueAlertDispatch } from '../services/queueService.js';
 
 const router = Router();
 
@@ -375,7 +376,16 @@ router.post('/trigger', async (req, res, next) => {
 
     await client.query('COMMIT');
 
-    // 5. Build safe client response (raw tracking token returned ONLY on initial trigger)
+    // 5. Enqueue asynchronous notification dispatch AFTER commit so a job can
+    // never reference an uncommitted alert. Queue failures must not fail the
+    // trigger itself — the alert is already durably persisted.
+    try {
+      await enqueueAlertDispatch(alert.id);
+    } catch (queueErr) {
+      console.error('[Queue] Failed to enqueue alert dispatch:', queueErr.message);
+    }
+
+    // 6. Build safe client response (raw tracking token returned ONLY on initial trigger)
     return res.status(201).json({
       status: 'ok',
       message: 'Emergency SOS alert triggered successfully.',
