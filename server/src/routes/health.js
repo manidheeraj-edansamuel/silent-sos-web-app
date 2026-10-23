@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { checkDbHealth } from '../config/database.js';
+import { getEmailStatus } from '../services/emailService.js';
 import { getQueueStatus } from '../services/queueService.js';
 
 const router = Router();
@@ -7,11 +8,13 @@ const router = Router();
 /**
  * GET /api/v1/health
  * Public health check and diagnostic endpoint
- * Inspects API service health, PostgreSQL connectivity, and dispatch queue depth.
+ * Inspects API service health, PostgreSQL connectivity, dispatch queue depth,
+ * and email transport configuration.
  */
 router.get('/', async (req, res) => {
   const dbHealth = await checkDbHealth();
   const queueStatus = await getQueueStatus();
+  const emailStatus = getEmailStatus();
   const isHealthy = dbHealth.isHealthy;
 
   const payload = {
@@ -25,6 +28,11 @@ router.get('/', async (req, res) => {
       api: 'ok',
       database: isHealthy ? 'ok' : 'unavailable',
       queue: queueStatus.available ? 'ok' : 'unavailable',
+      email: emailStatus.transport === 'none' ? 'unavailable' : 'ok',
+    },
+    email: {
+      transport: emailStatus.transport,
+      smtp_configured: emailStatus.configured,
     },
   };
 

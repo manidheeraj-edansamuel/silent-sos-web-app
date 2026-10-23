@@ -11,6 +11,7 @@
 import { PgBoss } from 'pg-boss';
 import { query } from '../config/database.js';
 import { getIO } from './socketService.js';
+import { getEmailStatus, sendAlertEmail } from './emailService.js';
 
 export const ALERT_DISPATCH_QUEUE = 'alert.dispatch';
 
@@ -19,6 +20,11 @@ const RETRY_OPTIONS = {
   retryDelay: 10,
   retryBackoff: true,
   retryDelayMax: 300,
+  // Dispatch payloads carry the raw tracking token (needed to build recipient
+  // links), so jobs are purged quickly in every terminal state to limit token
+  // retention. Retries complete well within the one-hour window.
+  deleteAfterSeconds: 3600,
+  retentionSeconds: 3600,
 };
 
 let bossInstance = null;
@@ -36,9 +42,78 @@ function buildConnectionOptions() {
 }
 
 /**
+ * Sends the emergency email to every contact that has an address on file.
+ * Partial failures are tolerated (already-delivered recipients are not emailed
+ * twice); a retry is only requested when every attempted send failed.
+ */
+async function dispatchEmails({ alert, trackingToken }) {
+  const summary = {
+    attempted: false,
+    transport: getEmailStatus().transport,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+    recipient_contact_ids: [],
+    skip_reasons: [],
+  };
+
+  if (alert.status !== 'active') {
+    summary.skip_reasons.push('alert_not_active');
+    return { summary, shouldRetry: false };
+  }
+
+  if (!trackingToken) {
+    summary.skip_reasons.push('missing_tracking_token');
+    return { summary, shouldRetry: false };
+  }
+
+  const contacts = await query(
+    `SELECT id, contact_email
+     FROM emergency_contacts
+     WHERE user_id = $1 AND contact_email IS NOT NULL AND TRIM(contact_email) <> ''
+     ORDER BY priority_order ASC, created_at ASC;`,
+    [alert.user_id]
+  );
+
+  summary.attempted = true;
+  if (contacts.rowCount === 0) {
+    summary.skip_reasons.push('no_email_contacts');
+    return { summary, shouldRetry: false };
+  }
+
+  for (const contact of contacts.rows) {
+    try {
+      const result = await sendAlertEmail({
+        to: contact.contact_email.trim(),
+        victimName: alert.victim_name,
+        triggeredAt: alert.triggered_at,
+        trackingToken,
+      });
+
+      if (result.status === 'sent') {
+        summary.sent += 1;
+        summary.recipient_contact_ids.push(contact.id);
+      } else {
+        summary.skipped += 1;
+        if (!summary.skip_reasons.includes(result.reason)) {
+          summary.skip_reasons.push(result.reason);
+        }
+      }
+    } catch (err) {
+      summary.failed += 1;
+      // Log the contact id only — recipient addresses and tokens are private.
+      console.error(`[Email] Delivery failed for contact ${contact.id}:`, err.message);
+    }
+  }
+
+  const shouldRetry = summary.failed > 0 && summary.sent === 0;
+  return { summary, shouldRetry };
+}
+
+/**
  * Processes a batch of alert dispatch jobs.
- * Records a delivery attempt audit event and notifies any connected recipients.
- * Throwing requeues the batch with backoff (pg-boss retry policy).
+ * Records a delivery audit event, notifies connected recipients, and emails
+ * emergency contacts. Throwing requeues the job with backoff (pg-boss policy).
  */
 async function processDispatchJobs(jobs) {
   for (const job of jobs) {
@@ -49,7 +124,10 @@ async function processDispatchJobs(jobs) {
     }
 
     const result = await query(
-      `SELECT id, status, triggered_at FROM alerts WHERE id = $1;`,
+      `SELECT a.id, a.user_id, a.status, a.triggered_at, u.full_name AS victim_name
+       FROM alerts a
+       JOIN users u ON a.user_id = u.id
+       WHERE a.id = $1;`,
       [alertId]
     );
 
@@ -60,6 +138,7 @@ async function processDispatchJobs(jobs) {
 
     const alert = result.rows[0];
     const io = getIO();
+    const realtimeEmitted = Boolean(io);
     if (io) {
       io.to(`alert:${alertId}`).emit('notification:dispatched', {
         alert_id: alertId,
@@ -69,18 +148,31 @@ async function processDispatchJobs(jobs) {
       });
     }
 
+    const { summary: emailSummary, shouldRetry } = await dispatchEmails({
+      alert,
+      trackingToken: job.data?.trackingToken,
+    });
+
     await query(
       `INSERT INTO alert_events (alert_id, event_type, event_data, created_at)
        VALUES ($1, 'notification_dispatched', $2, NOW());`,
       [
         alertId,
         JSON.stringify({
-          channel: 'realtime',
+          channels: ['realtime', 'email'],
+          realtime: { emitted: realtimeEmitted },
+          email: emailSummary,
           attempt: job.retryCount + 1,
           job_id: job.id,
         }),
       ]
     );
+
+    if (shouldRetry) {
+      throw new Error(
+        `Email dispatch failed for all ${emailSummary.failed} recipient(s) of alert ${alertId}`
+      );
+    }
   }
 }
 
@@ -117,10 +209,16 @@ export function initQueueService() {
  * Enqueues an alert dispatch job after the alert transaction has committed.
  * No-op (with a warning) when the queue is not running, so core alerting never
  * depends on queue availability.
+ *
+ * The raw tracking token is required to build recipient tracking links; it only
+ * exists at trigger time because the database stores a SHA-256 hash. It travels
+ * inside the job payload and is never logged.
+ *
  * @param {string} alertId - UUID of the triggered alert
+ * @param {string} [trackingToken] - Raw tracking token, used for email links
  * @returns {Promise<string|null>} pg-boss job id, or null when not enqueued
  */
-export async function enqueueAlertDispatch(alertId) {
+export async function enqueueAlertDispatch(alertId, trackingToken) {
   if (!bossInstance) {
     console.warn('[Queue] Dispatch enqueue skipped: queue service not initialized.');
     return null;
@@ -128,7 +226,7 @@ export async function enqueueAlertDispatch(alertId) {
 
   return bossInstance.send(
     ALERT_DISPATCH_QUEUE,
-    { alertId, enqueuedAt: new Date().toISOString() },
+    { alertId, trackingToken, enqueuedAt: new Date().toISOString() },
     RETRY_OPTIONS
   );
 }

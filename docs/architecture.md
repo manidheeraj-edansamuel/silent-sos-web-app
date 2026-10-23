@@ -21,9 +21,9 @@ The **Silent SOS Emergency Web App** provides a covert, fast, and reliable mecha
          ┌───────────────┘      │          └────────────────┐
          ▼                      ▼                           ▼
 ┌──────────────────┐  ┌──────────────────┐        ┌──────────────────┐
-│   PostgreSQL +   │  │  Redis Cache &   │        │ Notification Svc │
-│     PostGIS      │  │  BullMQ Queue    │        │  (Twilio / SES)  │
-│ (Users & Alerts) │  │  (Real-time Pub) │        │  (SMS / Email)   │
+│   PostgreSQL +   │  │  pg-boss Dispatch│        │ Notification Svc │
+│     PostGIS      │  │  Queue (Postgres)│        │ (SMTP / Twilio)  │
+│ (Users & Alerts) │  │  alert.dispatch  │        │  (Email / SMS)   │
 └──────────────────┘  └──────────────────┘        └─────────┬────────┘
                                                             │
                                                             ▼
@@ -69,6 +69,7 @@ The **Silent SOS Emergency Web App** provides a covert, fast, and reliable mecha
 - **Step 5A (Completed):** Public Recipient Tracking REST API (`GET /api/v1/alerts/track/:token`) with SHA-256 token lookup, rate limiting, strict privacy guarantees, chronological PostGIS coordinate breadcrumbs, and 24-hour resolved safety window.
 - **Step 5B (Completed):** Socket.IO real-time bidirectional location telemetry and status gateway (`ws://.../socket.io`) with cryptographic token-authenticated room subscriptions (`alert:<id>`), zero global coordinate broadcasts, and automated disconnect/reconnect resilience.
 - **Step 5C (Completed):** Interactive Leaflet map recipient tracking portal (`/?track=<token>`) with live breadcrumbs, accuracy circles, and resolution handling. pg-boss asynchronous dispatch queue (`alert.dispatch`) backed by PostgreSQL with post-commit enqueueing, retry with exponential backoff, `notification_dispatched` audit events, and queue depth reporting in the health endpoint. Production client build served by Express for single-service deployment.
+- **Phase C — Email (Completed):** The dispatch worker emails every emergency contact that has an address on file, embedding a private `/?track=<token>` live-tracking link. Nodemailer uses SMTP when `SMTP_HOST` is configured and a JSON transport otherwise, so development and tests never require a mail server. Raw tracking tokens ride only in the pg-boss job payload (deleted after one hour) and are never logged; audit events record delivery counts and contact IDs, never addresses. Emails are skipped for alerts that are no longer active, and a dispatch retries only when every attempted send failed to avoid duplicate emergency emails. Request logging redacts tokens from both `/alerts/track/:token` paths and `?track=` query strings.
 
 ### Phase 6: PWA, Offline Capabilities & Stealth Mode (Future Milestone)
 - Service worker caching, offline capability, installability
@@ -166,6 +167,7 @@ erDiagram
 | **Backend** | Node.js, Express.js | High-throughput REST & WebSocket event coordinator |
 | **Realtime** | Socket.IO | Bidirectional event transport for live coordinate streaming |
 | **Database** | PostgreSQL 18.6 + PostGIS 3.6.2 | ACID transactional integrity with native geographic coordinates & GiST spatial indexing |
-| **Queue/Cache** | Redis + BullMQ | Non-blocking background notification queues & active session cache |
+| **Queue** | pg-boss (PostgreSQL) | Durable background notification dispatch without Redis; jobs survive restarts and retry with backoff |
+| **Notifications** | Nodemailer | SMTP email delivery for emergency contacts; JSON transport fallback in development |
 | **Mapping** | Leaflet | Lightweight, privacy-respecting client mapping |
 | **Security** | Helmet, CORS, JWT | Layered perimeter and session security |

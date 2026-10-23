@@ -17,9 +17,9 @@ This is an emergency-oriented web application and is engineered with strict safe
 
 ## 🏗️ Incremental Development Status
 
-> **Current Phase: Step 5C — Live Recipient Map Portal & Asynchronous Dispatch Queue (Completed)**
+> **Current Phase: Phase C — Email Notification Channel (Completed)**
 > 
-> Step 5C delivers the interactive Leaflet + OpenStreetMap recipient tracking portal (`/?track=<token>`) with live Socket.IO telemetry, and a Postgres-backed asynchronous dispatch queue using pg-boss. SOS triggers enqueue an `alert.dispatch` job after commit; the worker records delivery attempts and notifies connected recipients without blocking the trigger request. Jobs retry with exponential backoff (5 attempts). The queue is verified with 4 dedicated integration tests, bringing the suite to 76 tests across 10 suites. The production client build is served directly by Express for single-service local deployment.
+> Emergency emails are now delivered by the `alert.dispatch` pg-boss worker. When an SOS alert is triggered, every emergency contact with an email address receives a private live-tracking link (`/?track=<token>`). Delivery uses SMTP when configured and nodemailer's JSON transport in development, so local development and tests never require a mail server. Recipient addresses and raw tracking tokens are never logged or written to audit records; dispatch jobs carrying the raw token are purged after one hour, and the database still stores only the SHA-256 token hash. All-failed deliveries retry with exponential backoff, and each attempt records a per-channel delivery summary. The suite covers 82 tests across 11 suites.
 
 ### Completed in Steps 1–5C
 - [x] Multi-package workspace directory structure (`client/`, `server/`, `database/`, `docs/`)
@@ -53,11 +53,16 @@ This is an emergency-oriented web application and is engineered with strict safe
 - [x] pg-boss asynchronous dispatch queue (`alert.dispatch`) with retry/backoff and post-commit enqueueing
 - [x] `notification_dispatched` delivery-attempt audit events written by the queue worker
 - [x] Queue depth reporting in `/api/v1/health` and graceful queue shutdown
+- [x] Email notification channel via nodemailer (SMTP in production, JSON transport fallback in development)
+- [x] Per-contact emergency emails containing private live-tracking links
+- [x] Per-channel delivery summaries in audit events (counts + contact IDs, never recipient addresses or tokens)
+- [x] Email transport visibility in `/api/v1/health` and `APP_BASE_URL`-aware tracking links
+- [x] Tracking-token redaction in HTTP request logs (`/alerts/track/:token` and `?track=...`)
 - [x] Single-service production deployment (Express serves `client/dist` with SPA fallback and CSP for map tiles/WebSockets)
-- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, Socket.IO, and Dispatch Queue (76 passing tests)
+- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, Socket.IO, Dispatch Queue, and Email (82 passing tests)
 
 ### Planned for Future Milestones (Phase C+)
-- ❌ Phase C: Multi-channel notification delivery — Email (SMTP), SMS (Twilio), and Web Push integrations
+- ❌ Phase C: SMS (Twilio) and Web Push delivery channels
 - ❌ Phase C: Recipient notification preferences and delivery receipts UI
 - ❌ Step 6: Stealth mode decoy calculator/notes UI & panic hotkeys — *Step 6*
 
@@ -93,7 +98,9 @@ silent-sos_web_app/
 │   │   ├── services/
 │   │   │   ├── passwordService.js # Argon2id password hashing
 │   │   │   ├── tokenService.js    # JWT generation & verification
-│   │   │   └── socketService.js   # Socket.IO real-time location gateway
+│   │   │   ├── socketService.js   # Socket.IO real-time location gateway
+│   │   │   ├── queueService.js    # pg-boss alert dispatch worker
+│   │   │   └── emailService.js    # SMTP/JSON alert email delivery
 │   │   ├── app.js              # Express app setup & middleware
 │   │   └── server.js           # HTTP & Socket.IO server bootstrap
 │   ├── tests/
@@ -103,7 +110,9 @@ silent-sos_web_app/
 │   │   ├── auth.test.js        # Authentication endpoints test
 │   │   ├── contacts.test.js    # Emergency contacts test
 │   │   ├── alerts.test.js      # Emergency alerts & location test
-│   │   └── socket.test.js      # Real-time Socket.IO gateway tests
+│   │   ├── socket.test.js      # Real-time Socket.IO gateway tests
+│   │   ├── queue.test.js       # pg-boss dispatch queue integration tests
+│   │   └── email.test.js       # Email template, escaping & transport tests
 │   ├── package.json
 │   └── .env.example
 ├── database/                   # Database Architecture (PostgreSQL + PostGIS)

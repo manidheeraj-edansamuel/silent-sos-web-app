@@ -78,6 +78,15 @@ app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
 // HTTP Request logging
+// Tracking tokens grant access to live location data, so they are redacted
+// before any URL is written to the request log.
+morgan.token('url', (req) => {
+  const url = req.originalUrl || req.url || '';
+  return url
+    .replace(/(\/alerts\/track\/)[^/?#]+/gi, '$1[redacted]')
+    .replace(/([?&]track=)[^&#]+/gi, '$1[redacted]');
+});
+
 if (process.env.NODE_ENV !== 'test') {
   app.use(morgan(process.env.NODE_ENV === 'production' ? 'combined' : 'dev'));
 }

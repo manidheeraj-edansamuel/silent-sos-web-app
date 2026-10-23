@@ -16,6 +16,7 @@ describe('Phase B: Asynchronous Dispatch Queue (pg-boss)', () => {
   let queueReady = false;
   let userId = '';
   let userToken = '';
+  let contactId = '';
 
   const waitFor = async (checkFn, timeoutMs = 20000, intervalMs = 250) => {
     const deadline = Date.now() + timeoutMs;
@@ -32,6 +33,9 @@ describe('Phase B: Asynchronous Dispatch Queue (pg-boss)', () => {
     dbAvailable = health.isHealthy;
     if (!dbAvailable) return;
 
+    // Deterministic fallback: never attempt real SMTP from the test suite.
+    delete process.env.SMTP_HOST;
+
     try {
       await initQueueService();
       queueReady = true;
@@ -47,6 +51,16 @@ describe('Phase B: Asynchronous Dispatch Queue (pg-boss)', () => {
     if (res.body?.data) {
       userToken = res.body.data.token;
       userId = res.body.data.user.id;
+
+      const contactRes = await request(app)
+        .post('/api/v1/contacts')
+        .set('Authorization', `Bearer ${userToken}`)
+        .send({
+          contact_name: 'Queue Email Recipient',
+          contact_email: `queue.recipient.${Date.now()}@example.local`,
+          priority_order: 1,
+        });
+      contactId = contactRes.body?.data?.contact?.id || '';
     }
   });
 
@@ -62,6 +76,7 @@ describe('Phase B: Asynchronous Dispatch Queue (pg-boss)', () => {
         [userId]
       );
       await query(`DELETE FROM alerts WHERE user_id = $1;`, [userId]);
+      await query(`DELETE FROM emergency_contacts WHERE user_id = $1;`, [userId]);
       await query(`DELETE FROM users WHERE id = $1;`, [userId]);
     }
     await closePool();
@@ -104,8 +119,16 @@ describe('Phase B: Asynchronous Dispatch Queue (pg-boss)', () => {
     assert.ok(auditRow, 'expected a notification_dispatched audit event from the worker');
     const data =
       typeof auditRow.event_data === 'string' ? JSON.parse(auditRow.event_data) : auditRow.event_data;
-    assert.equal(data.channel, 'realtime');
+    assert.ok(Array.isArray(data.channels), 'audit event should list attempted channels');
+    assert.ok(data.channels.includes('realtime'));
+    assert.ok(data.channels.includes('email'));
     assert.ok(data.job_id, 'audit event should reference the pg-boss job id');
+
+    // Phase C: the seeded emergency contact must receive the alert email.
+    assert.ok(contactId, 'expected an emergency contact to be seeded');
+    assert.equal(data.email.sent, 1, 'expected exactly one email to be delivered');
+    assert.equal(data.email.failed, 0);
+    assert.deepEqual(data.email.recipient_contact_ids, [contactId]);
   });
 
   test('3. Queue depth reports job counts after processing', async () => {

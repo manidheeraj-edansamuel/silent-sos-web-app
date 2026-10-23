@@ -378,9 +378,10 @@ router.post('/trigger', async (req, res, next) => {
 
     // 5. Enqueue asynchronous notification dispatch AFTER commit so a job can
     // never reference an uncommitted alert. Queue failures must not fail the
-    // trigger itself — the alert is already durably persisted.
+    // trigger itself — the alert is already durably persisted. The raw tracking
+    // token is passed only in the job payload (never logged, never stored raw).
     try {
-      await enqueueAlertDispatch(alert.id);
+      await enqueueAlertDispatch(alert.id, rawTrackingToken);
     } catch (queueErr) {
       console.error('[Queue] Failed to enqueue alert dispatch:', queueErr.message);
     }
