@@ -1,5 +1,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import RecipientTrackingMap from './components/RecipientTrackingMap.jsx';
+import StealthMode from './components/StealthMode.jsx';
+import {
+  STEALTH_PIN_PATTERN,
+  isStealthPinConfigured,
+  saveStealthPin,
+  clearStealthPin,
+} from './utils/stealth.js';
 
 export default function App() {
   // Authentication & Session State
@@ -46,6 +53,14 @@ export default function App() {
   const [deliveryReceipts, setDeliveryReceipts] = useState(null);
   const [receiptsLoading, setReceiptsLoading] = useState(false);
   const [receiptsError, setReceiptsError] = useState('');
+
+  // Phase D: Stealth mode (decoy calculator/notes + panic triggers)
+  const [stealthOpen, setStealthOpen] = useState(false);
+  const [stealthPinConfigured, setStealthPinConfigured] = useState(() => isStealthPinConfigured());
+  const [stealthPinEditing, setStealthPinEditing] = useState(false);
+  const [stealthPinForm, setStealthPinForm] = useState({ pin: '', confirm: '' });
+  const [stealthPinError, setStealthPinError] = useState('');
+  const [stealthPinSaving, setStealthPinSaving] = useState(false);
 
   // Global Alert / Feedback State
   const [alertFeedback, setAlertFeedback] = useState(null);
@@ -375,7 +390,7 @@ export default function App() {
   };
 
   // Step 4: SOS Trigger Handler
-  const handleTriggerSos = async () => {
+  const handleTriggerSos = async (triggerSource = 'manual_ui') => {
     if (sosActivating || activeAlert) return;
     setSosActivating(true);
     setLocationStatus('acquiring');
@@ -391,7 +406,7 @@ export default function App() {
             Accept: 'application/json',
           },
           body: JSON.stringify({
-            trigger_source: 'manual_ui',
+            trigger_source: triggerSource,
             location: locCoords,
             location_error: locErr,
           }),
@@ -446,6 +461,59 @@ export default function App() {
       },
       { enableHighAccuracy: true, timeout: 5000, maximumAge: 0 }
     );
+  };
+
+  // Phase D: Global panic hotkey (Ctrl+Shift+X) disguises the screen and triggers SOS
+  useEffect(() => {
+    const handlePanicShortcut = (event) => {
+      if (!user) return;
+      if (!(event.ctrlKey || event.metaKey) || !event.shiftKey) return;
+      if (event.key.toLowerCase() !== 'x') return;
+      event.preventDefault();
+      setStealthOpen(true);
+      if (!activeAlert && !sosActivating) {
+        handleTriggerSos('panic_hotkey');
+      }
+    };
+
+    window.addEventListener('keydown', handlePanicShortcut);
+    return () => window.removeEventListener('keydown', handlePanicShortcut);
+  }, [user, activeAlert, sosActivating, handleTriggerSos]);
+
+  const handleStealthPinSave = async (e) => {
+    e.preventDefault();
+    const { pin, confirm } = stealthPinForm;
+    if (!STEALTH_PIN_PATTERN.test(pin)) {
+      setStealthPinError('PIN must be 4 to 8 digits.');
+      return;
+    }
+    if (pin !== confirm) {
+      setStealthPinError('PIN entries do not match.');
+      return;
+    }
+
+    setStealthPinSaving(true);
+    try {
+      await saveStealthPin(pin);
+      setStealthPinConfigured(true);
+      setStealthPinEditing(false);
+      setStealthPinForm({ pin: '', confirm: '' });
+      setStealthPinError('');
+      showAlert('Stealth PIN configured for this browser.', 'success');
+    } catch (err) {
+      setStealthPinError(err.message || 'Unable to save the stealth PIN.');
+    } finally {
+      setStealthPinSaving(false);
+    }
+  };
+
+  const handleStealthPinClear = () => {
+    clearStealthPin();
+    setStealthPinConfigured(false);
+    setStealthPinEditing(false);
+    setStealthPinForm({ pin: '', confirm: '' });
+    setStealthPinError('');
+    showAlert('Stealth PIN removed from this browser.', 'info');
   };
 
   // Step 4: Resolve Alert Handler
@@ -612,8 +680,8 @@ export default function App() {
     {
       step: 'Step 4',
       name: 'Silent SOS Trigger & Location Engine',
-      status: 'Active / Complete',
-      state: 'active',
+      status: 'Completed',
+      state: 'completed',
       desc: 'One-touch SOS activation, PostGIS coordinates, continuous watchPosition telemetry, resolve lifecycle.',
     },
     {
@@ -621,7 +689,14 @@ export default function App() {
       name: 'Real-time Gateway & Notification Channels',
       status: 'Completed',
       state: 'completed',
-      desc: 'Socket.IO live telemetry, pg-boss dispatch queue, email and browser push delivery.',
+      desc: 'Socket.IO live telemetry, pg-boss dispatch queue, email, SMS, and browser push delivery.',
+    },
+    {
+      step: 'Step 6',
+      name: 'Stealth Mode & Discreet Activation',
+      status: 'Completed',
+      state: 'completed',
+      desc: 'Calculator/notes decoy, SHA-256 PIN trigger, panic hotkeys, and discreet exit.',
     },
   ];
 
@@ -664,7 +739,7 @@ export default function App() {
         </div>
 
         <div className="header-actions">
-          <span className="badge badge-step">Step 4 Active</span>
+          <span className="badge badge-step">Step 6 · Stealth</span>
           {healthStatus === 'connected' && (
             <span className="badge badge-connected">
               <span className="status-dot online"></span> API Online
@@ -935,7 +1010,7 @@ export default function App() {
               <div className="sos-btn-wrapper">
                 <button
                   className="btn-sos-trigger"
-                  onClick={handleTriggerSos}
+                  onClick={() => handleTriggerSos()}
                   disabled={sosActivating}
                 >
                   {sosActivating ? (
@@ -1186,6 +1261,145 @@ export default function App() {
                   </div>
                 </div>
               ))}
+            </div>
+          )}
+        </section>
+
+        {/* Phase D: Stealth Mode & Panic Hotkeys */}
+        <section className="card stealth-settings-card">
+          <div className="card-header">
+            <div>
+              <div className="card-title">
+                <svg
+                  width="22"
+                  height="22"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <rect x="3" y="11" width="18" height="10" rx="2" ry="2" />
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+                </svg>
+                <span>Stealth Mode & Panic Hotkeys</span>
+              </div>
+              <p className="stealth-settings-desc">
+                Open a harmless calculator and notes decoy. Type your PIN then press{' '}
+                <kbd>=</kbd> to silently trigger SOS, or press <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+
+                <kbd>X</kbd> from anywhere in the app. Hold the decoy header for 2 seconds (or{' '}
+                <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>E</kbd>) to exit.
+              </p>
+            </div>
+            <div className="stealth-settings-actions">
+              <button
+                className="btn btn-primary btn-sm"
+                onClick={() => setStealthOpen(true)}
+              >
+                Open Decoy
+              </button>
+              {stealthPinConfigured && !stealthPinEditing && (
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={() => {
+                    setStealthPinEditing(true);
+                    setStealthPinError('');
+                  }}
+                >
+                  Change PIN
+                </button>
+              )}
+            </div>
+          </div>
+
+          {stealthPinError && (
+            <div className="alert alert-error">
+              <span>✗</span>
+              <span>{stealthPinError}</span>
+            </div>
+          )}
+
+          {!stealthPinConfigured || stealthPinEditing ? (
+            <form className="stealth-pin-form" onSubmit={handleStealthPinSave}>
+              <div className="stealth-pin-fields">
+                <div className="form-group">
+                  <label className="form-label" htmlFor="stealth-pin-new">New PIN (4–8 digits)</label>
+                  <input
+                    id="stealth-pin-new"
+                    className="form-input"
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="new-password"
+                    maxLength={8}
+                    value={stealthPinForm.pin}
+                    onChange={(e) =>
+                      setStealthPinForm({
+                        ...stealthPinForm,
+                        pin: e.target.value.replace(/\D/g, '').slice(0, 8),
+                      })
+                    }
+                    placeholder="••••"
+                  />
+                </div>
+                <div className="form-group">
+                  <label className="form-label" htmlFor="stealth-pin-confirm">Confirm PIN</label>
+                  <input
+                    id="stealth-pin-confirm"
+                    className="form-input"
+                    type="password"
+                    inputMode="numeric"
+                    autoComplete="new-password"
+                    maxLength={8}
+                    value={stealthPinForm.confirm}
+                    onChange={(e) =>
+                      setStealthPinForm({
+                        ...stealthPinForm,
+                        confirm: e.target.value.replace(/\D/g, '').slice(0, 8),
+                      })
+                    }
+                    placeholder="••••"
+                  />
+                </div>
+              </div>
+              <div className="stealth-pin-actions">
+                <button className="btn btn-primary btn-sm" type="submit" disabled={stealthPinSaving}>
+                  {stealthPinSaving ? 'Hashing…' : 'Save PIN'}
+                </button>
+                {stealthPinConfigured && (
+                  <>
+                    <button
+                      className="btn btn-outline btn-sm"
+                      type="button"
+                      onClick={() => {
+                        setStealthPinEditing(false);
+                        setStealthPinForm({ pin: '', confirm: '' });
+                        setStealthPinError('');
+                      }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      className="btn btn-danger-outline btn-sm"
+                      type="button"
+                      onClick={handleStealthPinClear}
+                    >
+                      Remove PIN
+                    </button>
+                  </>
+                )}
+              </div>
+              <p className="stealth-pin-note">
+                The PIN never leaves this device. Only its SHA-256 hash is stored in browser
+                storage.
+              </p>
+            </form>
+          ) : (
+            <div className="stealth-pin-status">
+              <span className="channel-tag on">PIN configured on this device</span>
+              <span className="stealth-pin-note">
+                The decoy opens without a PIN, but only the configured PIN can trigger SOS.
+              </span>
             </div>
           )}
         </section>
@@ -1549,9 +1763,17 @@ export default function App() {
         </div>
       </section>
 
+      {/* Phase D: Full-screen decoy overlay */}
+      {stealthOpen && (
+        <StealthMode
+          onPanic={() => handleTriggerSos('stealth_pin')}
+          onExit={() => setStealthOpen(false)}
+        />
+      )}
+
       {/* Footer */}
       <footer className="app-footer">
-        <p>Silent SOS Emergency Web App • Step 4: Silent SOS Alert Trigger & Geolocation Tracking</p>
+        <p>Silent SOS Emergency Web App • Step 6: Stealth Mode & Discreet Activation</p>
         <p style={{ marginTop: '0.35rem', color: 'var(--text-muted)' }}>
           Discreet SOS activation • PostGIS coordinate telemetry • Transactional audit logging • Strict multi-tenant isolation
         </p>

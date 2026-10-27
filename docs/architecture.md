@@ -73,10 +73,18 @@ The **Silent SOS Emergency Web App** provides a covert, fast, and reliable mecha
 - **Phase C — Web Push (Completed):** Recipients on the tracking portal can opt into browser push for one specific alert via `POST /api/v1/alerts/track/:token/push-subscriptions` (migration 010, `push_subscriptions`). The portal registers `sw.js`, subscribes through `PushManager` with the VAPID public key from `GET /api/v1/alerts/push/config`, and receives `location_update` and `resolved` notifications. Delivery is throttled per subscription (`last_notified_at`, `PUSH_LOCATION_INTERVAL_SECONDS` default 120) to prevent notification spam. Click-through URLs are rebuilt from per-subscription AES-256-GCM encrypted tracking tokens, so plaintext tokens are never stored; endpoints returning 403/404/410 are deleted, and resolution removes all subscriptions for the alert. Push endpoints, keys, and tokens are never logged or written to audit records, and `push_dispatched` audit events store only counts and event names.
 - **Phase C — SMS, Preferences & Receipts (Completed):** Migration 011 adds `notify_email` / `notify_sms` to `emergency_contacts`, and the dispatch worker enforces both the preference and the presence of a destination before sending. SMS delivery uses Twilio's REST API only when `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER` are configured; phone numbers are normalized to E.164 and invalid values are skipped rather than sent. Every email/SMS attempt is written to `notification_attempts` with a masked destination (`a***@domain`, `+15***9001`) and a scrubbed error message. The authenticated alert owner can read receipts at `GET /api/v1/alerts/:id/notifications`, which is tenant-isolated and currently rendered as a live receipts card in the dashboard. A dispatch retries only when at least one send was attempted and no channel reached any recipient.
 
-### Phase 6: PWA, Offline Capabilities & Stealth Mode (Future Milestone)
+### Phase 6: Stealth Mode & Discreet Activation (Completed)
+- Full-screen decoy overlay (`client/src/components/StealthMode.jsx`) styled as a neutral calculator/notes utility, independent of the emergency dark theme
+- Working calculator keypad and a locally persisted notes tab (`localStorage`, key `silent_sos_decoy_notes`)
+- 4–8 digit stealth PIN hashed with SHA-256 in the browser (`client/src/utils/stealth.js`); only the hex hash and PIN length are stored locally, and the PIN is never transmitted to the server
+- PIN entry followed by `=` silently triggers the existing SOS flow while the decoy keeps displaying `0`
+- `Ctrl`+`Shift`+`X` global panic hotkey opens the decoy and triggers SOS from anywhere in the authenticated app
+- Trigger origin recorded in the `triggered` audit event (`stealth_pin` or `panic_hotkey`); location fallback, dispatch, and receipts are unchanged
+- Discreet exit by holding the decoy header for 2 seconds or pressing `Ctrl`+`Shift`+`E`
+
+### Phase 7: PWA & Offline Capabilities (Future Milestone)
 - Service worker precaching, offline capability, installability (a minimal push-only service worker already ships)
 - Offline emergency alert queuing with IndexedDB synchronization
-- Decoy calculator/notes stealth UI and panic hotkeys
 
 ---
 
@@ -189,4 +197,4 @@ erDiagram
 | **Queue** | pg-boss (PostgreSQL) | Durable background notification dispatch without Redis; jobs survive restarts and retry with backoff |
 | **Notifications** | Nodemailer, Twilio, Web Push (VAPID) | SMTP email, E.164-normalized SMS, and browser push; JSON transport fallback in development, SMS skipped without credentials, ephemeral VAPID keys when unset |
 | **Mapping** | Leaflet | Lightweight, privacy-respecting client mapping |
-| **Security** | Helmet, CORS, JWT, AES-256-GCM | Layered perimeter and session security; push click-through tokens encrypted at rest and delivery destinations masked in receipts |
+| **Security** | Helmet, CORS, JWT, AES-256-GCM, SHA-256 | Layered perimeter and session security; push click-through tokens encrypted at rest, delivery destinations masked in receipts, and the stealth PIN stored only as a local SHA-256 hash |

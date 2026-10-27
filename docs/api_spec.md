@@ -827,9 +827,11 @@ Removes a subscription.
 
 ## 5. Planned Routes for Future Milestones
 
-### Stealth Mode & Hardening — *Step 6 / Phase E*
-- Stealth mode decoy calculator/notes UI and panic hotkeys
+### Hardening — *Phase E*
 - Production hardening: request body limits, stricter public-endpoint rate limiting, and security regression tests
+
+### Client-Only Features (No API Surface)
+- Stealth mode decoy calculator/notes UI, SHA-256 PIN trigger, and panic hotkeys are implemented entirely in the browser; the only API call is the existing `POST /api/v1/alerts/trigger`, which receives `trigger_source: "stealth_pin"` or `"panic_hotkey"` *(completed)*
 - SMS delivery channel via Twilio *(completed)*
 - Recipient notification preferences and delivery receipts UI *(completed)*
 - Interactive Leaflet recipient tracking portal with live GPS breadcrumb rendering *(completed)*

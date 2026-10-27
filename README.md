@@ -17,17 +17,15 @@ This is an emergency-oriented web application and is engineered with strict safe
 
 ## 🏗️ Incremental Development Status
 
-> **Current Phase: Phase C — Multi-Channel Notifications (Completed)**
-> 
-> Emergency alerts dispatch through three channels. Email and SMS are delivered by the `alert.dispatch` pg-boss worker; browser push is delivered to recipients who opt in from the tracking portal. Email uses SMTP when configured and nodemailer's JSON transport in development; SMS uses Twilio's REST API and is skipped safely when credentials are absent.
+> **Current Phase: Phase D / Step 6 — Stealth Mode (Completed)**
 >
-> Each emergency contact can opt out of email or SMS independently (migration 011), and every send attempt is recorded in `notification_attempts` with a masked destination. The alert owner can follow live delivery receipts in the dashboard (`GET /api/v1/alerts/:id/notifications`).
+> The app can now be disguised as a neutral calculator and notes utility. The decoy opens full-screen, performs normal calculations, and stores quick notes locally. A user-defined 4–8 digit PIN is hashed with SHA-256 in the browser (only the hash and length are stored in `localStorage`); typing the PIN and pressing `=` silently triggers the SOS flow without changing the decoy display.
 >
-> Recipients viewing the tracking portal can subscribe to browser push for that single alert. Live location pushes are throttled (`PUSH_LOCATION_INTERVAL_SECONDS`, default 120 seconds) and a final notification fires on resolution. Click-through URLs are rebuilt from per-subscription encrypted tracking tokens (AES-256-GCM), so plaintext tokens are never stored; stale endpoints (403/404/410) are deleted automatically, and all subscriptions are removed once the alert is resolved.
+> `Ctrl`+`Shift`+`X` works from anywhere in the authenticated app: it opens the decoy and triggers SOS in the same action. Both stealth triggers record their origin (`stealth_pin`, `panic_hotkey`) in the `triggered` audit event, and the existing location fallback, queue dispatch, and recipient notifications apply unchanged. The decoy exits by holding its header for two seconds or pressing `Ctrl`+`Shift`+`E`.
 >
-> Recipient addresses, phone numbers, push endpoints, and raw tracking tokens are never logged or written to audit records; dispatch jobs carrying the raw token are purged after one hour, and the database still stores only the SHA-256 token hash for alert lookup. All-failed deliveries retry with exponential backoff, and each dispatch records a per-channel delivery summary. The suite covers 104 tests across 14 suites.
+> Phase C remains intact: email, SMS, and web push dispatch through the `alert.dispatch` pg-boss worker, per-contact channel preferences are enforced, delivery attempts are recorded with masked destinations, and the alert owner can follow live receipts in the dashboard. The suite covers 104 tests across 14 suites; stealth mode was additionally verified end-to-end in the browser.
 
-### Completed in Steps 1–5C
+### Completed in Steps 1–6
 - [x] Multi-package workspace directory structure (`client/`, `server/`, `database/`, `docs/`)
 - [x] React + Vite frontend with responsive layout and real-time backend health connectivity display
 - [x] Node.js + Express backend skeleton with security headers (`helmet`), CORS configuration, and `/api/v1/health` endpoint
@@ -77,11 +75,15 @@ This is an emergency-oriented web application and is engineered with strict safe
 - [x] Delivery receipts dashboard card with per-channel counts, masked destinations, and statuses
 - [x] SMS transport visibility in `/api/v1/health`
 - [x] Single-service production deployment (Express serves `client/dist` with SPA fallback and CSP for map tiles/WebSockets)
+- [x] Calculator and notes decoy overlay with a neutral light theme, working arithmetic, and locally persisted notes
+- [x] SHA-256 stealth PIN stored in browser storage only (no plaintext PIN, no server transmission)
+- [x] PIN + `=` silent SOS trigger and `Ctrl`+`Shift`+`X` global panic hotkey with audit-safe trigger sources
+- [x] Discreet decoy exit (2-second header hold or `Ctrl`+`Shift`+`E`) and PIN management card
 - [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, Socket.IO, Dispatch Queue, Email, Web Push, SMS, and Delivery Receipts (104 passing tests)
 
-### Planned for Future Milestones (Phase D+)
-- ❌ Step 6: Stealth mode decoy calculator/notes UI & panic hotkeys
-- ❌ Phase E: production hardening and final verification
+### Planned for Future Milestones (Phase E)
+- ❌ Production hardening: request size limits, rate-limited push config, security regression tests
+- ❌ Final end-to-end verification and documentation pass
 
 ---
 
@@ -93,8 +95,13 @@ silent-sos_web_app/
 │   ├── public/                 # Static web assets (sw.js service worker)
 │   ├── src/
 │   │   ├── App.jsx             # Root UI with SOS trigger, contacts & auth
+│   │   ├── components/
+│   │   │   ├── RecipientTrackingMap.jsx # Public Leaflet tracking portal
+│   │   │   └── StealthMode.jsx          # Decoy calculator/notes overlay
+│   │   ├── utils/
+│   │   │   └── stealth.js      # SHA-256 stealth PIN storage helpers
 │   │   ├── main.jsx            # Application entry point
-│   │   └── index.css           # Core styling tokens & dark theme
+│   │   └── index.css           # Core styling tokens, dark theme & decoy theme
 │   ├── index.html
 │   ├── vite.config.js          # Vite config with API proxy
 │   ├── package.json
@@ -239,3 +246,4 @@ npm test
 - **Secure Random Tracking Tokens**: Public predictable IDs must never be used for location tracking URLs.
 - **Security Headers & CORS**: Standard defense-in-depth headers applied via `helmet` and strict origin policies.
 - **Immutable Audit Trail**: Emergency events and transitions are preserved in `alert_events`.
+- **Local-Only Stealth PIN**: The stealth PIN is never transmitted; only its SHA-256 hash and length are stored in browser storage, and panic triggers record only a source label in the audit trail.
