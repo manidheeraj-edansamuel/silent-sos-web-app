@@ -173,6 +173,7 @@ silent-sos_web_app/
 │   │   └── seed.js             # Dev seed data runner
 │   └── README.md               # Detailed database & schema documentation
 ├── docs/                       # Technical & Architectural Documentation
+│   ├── PROJECT_REPORT.md       # Detailed project report (submission document)
 │   ├── architecture.md         # System architecture, ERD & component design
 │   ├── deployment.md           # Render + Neon deployment walkthrough
 │   ├── safety_constraints.md   # Critical safety & failure-handling constraints
