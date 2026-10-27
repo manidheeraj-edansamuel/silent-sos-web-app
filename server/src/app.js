@@ -11,6 +11,7 @@ import authRouter from './routes/auth.js';
 import contactsRouter from './routes/contacts.js';
 import alertsRouter from './routes/alerts.js';
 import { notFoundHandler, errorHandler } from './middleware/errorHandler.js';
+import { isOriginAllowed } from './config/origins.js';
 
 // Load environment variables
 dotenv.config();
@@ -22,6 +23,15 @@ const app = express();
 
 // Do not advertise the server framework in responses.
 app.disable('x-powered-by');
+
+// Managed hosts (Render, Railway, Fly) terminate TLS at a reverse proxy.
+// Trust the first hop so rate limiters and logs key on the real client IP.
+if (process.env.TRUST_PROXY) {
+  app.set(
+    'trust proxy',
+    /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY
+  );
+}
 
 // Security middleware - Helmet
 // CSP relaxed for Leaflet OpenStreetMap tiles and same-origin Socket.IO WebSockets
@@ -52,20 +62,10 @@ if (fs.existsSync(clientDistPath)) {
 // CORS configuration
 // Includes the server's own origin(s) so a same-origin production deployment
 // (client served by this Express server) passes same-origin POST/WebSocket checks.
-const serverPort = parseInt(process.env.PORT, 10) || 5000;
-const allowedOrigins = [
-  ...(process.env.CORS_ORIGIN || 'http://localhost:5173').split(','),
-  `http://localhost:${serverPort}`,
-  `http://127.0.0.1:${serverPort}`,
-]
-  .map((origin) => origin.trim())
-  .filter(Boolean);
-
 app.use(
   cors({
     origin: (origin, callback) => {
-      // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
-      if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+      if (isOriginAllowed(origin)) {
         callback(null, true);
       } else {
         callback(new Error(`Origin ${origin} not allowed by CORS`));

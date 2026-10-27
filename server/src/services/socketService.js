@@ -10,6 +10,7 @@
 import { Server } from 'socket.io';
 import crypto from 'crypto';
 import { query } from '../config/database.js';
+import { isOriginAllowed } from '../config/origins.js';
 
 // High-entropy tracking token validation regex (16-128 base64url characters)
 const TRACKING_TOKEN_REGEX = /^[A-Za-z0-9_-]{16,128}$/;
@@ -64,22 +65,13 @@ export function initSocketServer(httpServer) {
     return ioInstance;
   }
 
-  // Allow the configured origins plus the server's own origin(s) so that a
-  // same-origin production deployment (client served by this Express server)
+  // Allow the configured origins plus the deployment's own public URL so that
+  // a same-origin production deployment (client served by this Express server)
   // can complete the WebSocket handshake, which always sends an Origin header.
-  const serverPort = parseInt(process.env.PORT, 10) || 5000;
-  const allowedOrigins = [
-    ...(process.env.CORS_ORIGIN || 'http://localhost:5173').split(','),
-    `http://localhost:${serverPort}`,
-    `http://127.0.0.1:${serverPort}`,
-  ]
-    .map((origin) => origin.trim())
-    .filter(Boolean);
-
   ioInstance = new Server(httpServer, {
     cors: {
       origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+        if (isOriginAllowed(origin)) {
           callback(null, true);
         } else {
           callback(new Error(`Origin ${origin} not allowed by CORS`));

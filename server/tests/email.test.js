@@ -9,12 +9,19 @@ import {
 
 describe('Phase C: Email Notification Service', () => {
   const originalAppBaseUrl = process.env.APP_BASE_URL;
+  const originalRenderExternalUrl = process.env.RENDER_EXTERNAL_URL;
 
   after(() => {
     if (originalAppBaseUrl === undefined) {
       delete process.env.APP_BASE_URL;
     } else {
       process.env.APP_BASE_URL = originalAppBaseUrl;
+    }
+
+    if (originalRenderExternalUrl === undefined) {
+      delete process.env.RENDER_EXTERNAL_URL;
+    } else {
+      process.env.RENDER_EXTERNAL_URL = originalRenderExternalUrl;
     }
   });
 
@@ -98,5 +105,25 @@ describe('Phase C: Email Notification Service', () => {
       triggeredAt: Date.now(),
     });
     assert.deepEqual(missingToken, { status: 'skipped', reason: 'missing_tracking_token' });
+  });
+
+  test('7. Tracking links fall back to RENDER_EXTERNAL_URL when hosted', () => {
+    const previousAppBaseUrl = process.env.APP_BASE_URL;
+    delete process.env.APP_BASE_URL;
+    process.env.RENDER_EXTERNAL_URL = 'https://silent-sos.onrender.com/';
+
+    try {
+      assert.equal(
+        buildTrackingUrl('abcDEF123_-xyz'),
+        'https://silent-sos.onrender.com/?track=abcDEF123_-xyz'
+      );
+    } finally {
+      process.env.APP_BASE_URL = previousAppBaseUrl;
+      if (originalRenderExternalUrl === undefined) {
+        delete process.env.RENDER_EXTERNAL_URL;
+      } else {
+        process.env.RENDER_EXTERNAL_URL = originalRenderExternalUrl;
+      }
+    }
   });
 });

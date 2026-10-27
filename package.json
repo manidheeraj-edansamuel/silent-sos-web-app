@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "description": "Silent SOS Emergency Web App - Multi-package workspace root",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
     "dev": "concurrently -n \"SERVER,CLIENT\" -c \"blue,magenta\" \"npm run dev:server\" \"npm run dev:client\"",
     "dev:server": "npm --prefix server run dev",

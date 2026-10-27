@@ -61,7 +61,9 @@ export function getEmailStatus() {
 }
 
 function getAppBaseUrl() {
-  const configured = process.env.APP_BASE_URL?.trim();
+  // RENDER_EXTERNAL_URL is injected by Render, so tracking links work even when
+  // APP_BASE_URL has not been configured yet.
+  const configured = (process.env.APP_BASE_URL || process.env.RENDER_EXTERNAL_URL)?.trim();
   if (configured) return configured.replace(/\/+$/, '');
   const port = process.env.PORT || '5000';
   return `http://localhost:${port}`;

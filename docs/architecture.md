@@ -88,6 +88,9 @@ The **Silent SOS Emergency Web App** provides a covert, fast, and reliable mecha
 - `Cache-Control: no-store` applied to every `/api` response so session, location, and receipt data is never cached
 - Public `GET /api/v1/alerts/push/config` rate-limited with `pushConfigRateLimiter` (60 requests / 15 minutes / IP)
 - Hardening regression suite covers headers, payload limits, malformed JSON, non-leaking 404s, and VAPID public-key-only exposure
+- Managed hosting: `DATABASE_URL` (with TLS via `DATABASE_SSL`) takes precedence over discrete DB variables, and `TRUST_PROXY` trusts one reverse-proxy hop so rate limits key on the real client IP
+- The deployed public origin (`RENDER_EXTERNAL_URL` / `APP_BASE_URL`) is automatically allowed for CORS and Socket.IO, and email tracking links fall back to it
+- `render.yaml` blueprint and `docs/deployment.md` cover build, idempotent migrations, secrets, HTTPS requirements, and post-deploy verification
 
 ### Phase 8: PWA & Offline Capabilities (Future Milestone)
 - Service worker precaching, offline capability, installability (a minimal push-only service worker already ships)

@@ -1,0 +1,65 @@
+# ==============================================================================
+# Render Blueprint - Silent SOS single-service deployment
+# ==============================================================================
+# The Express server serves the built React client, the Socket.IO gateway, and
+# the pg-boss dispatch worker in one process. PostgreSQL + PostGIS is expected
+# to be provided externally (Neon or Supabase); paste the provider's DIRECT
+# connection string into DATABASE_URL when Render prompts for it.
+#
+# Secrets marked `sync: false` are requested once in the Render dashboard.
+# Generate the VAPID pair locally with:
+#   npx web-push generate-vapid-keys
+# ==============================================================================
+
+services:
+  - type: web
+    name: silent-sos
+    runtime: node
+    plan: free
+    buildCommand: npm run install:all && npm run build
+    startCommand: npm --prefix server run db:migrate && npm start
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      - key: NODE_ENV
+        value: production
+      # One managed reverse proxy hop in front of the app.
+      - key: TRUST_PROXY
+        value: "1"
+      - key: DATABASE_URL
+        sync: false
+      - key: DATABASE_SSL
+        value: "true"
+      - key: JWT_SECRET
+        generateValue: true
+      # APP_BASE_URL and CORS_ORIGIN are optional: the service's own public URL
+      # is read from RENDER_EXTERNAL_URL and allowed automatically. Add them
+      # only when you attach a custom domain.
+      # Optional: Web Push (required for recipient push notifications)
+      - key: VAPID_PUBLIC_KEY
+        sync: false
+      - key: VAPID_PRIVATE_KEY
+        sync: false
+      - key: VAPID_SUBJECT
+        sync: false
+      # Optional: email delivery (without SMTP, production reports email as unavailable)
+      # - key: SMTP_HOST
+      #   sync: false
+      # - key: SMTP_PORT
+      #   sync: false
+      # - key: SMTP_SECURE
+      #   sync: false
+      # - key: SMTP_USER
+      #   sync: false
+      # - key: SMTP_PASS
+      #   sync: false
+      # - key: EMAIL_FROM
+      #   sync: false
+      # Optional: SMS delivery
+      # - key: TWILIO_ACCOUNT_SID
+      #   sync: false
+      # - key: TWILIO_AUTH_TOKEN
+      #   sync: false
+      # - key: TWILIO_FROM_NUMBER
+      #   sync: false

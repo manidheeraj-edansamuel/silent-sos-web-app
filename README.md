@@ -19,7 +19,7 @@ This is an emergency-oriented web application and is engineered with strict safe
 
 > **Current Phase: Phase E — Production Hardening (Completed)**
 >
-> The API now rejects JSON and URL-encoded payloads above 64 KB, no longer advertises Express via `X-Powered-By`, and marks every `/api` response `Cache-Control: no-store`. The public push-configuration endpoint is rate-limited (60 requests per 15 minutes per IP) and still returns only the VAPID public key. A new hardening suite verifies security headers, payload limits, malformed-JSON handling, non-leaking 404s, and push-config privacy. The suite covers 110 tests across 15 suites.
+> The API now rejects JSON and URL-encoded payloads above 64 KB, no longer advertises Express via `X-Powered-By`, and marks every `/api` response `Cache-Control: no-store`. The public push-configuration endpoint is rate-limited (60 requests per 15 minutes per IP) and still returns only the VAPID public key. A new hardening suite verifies security headers, payload limits, malformed-JSON handling, non-leaking 404s, and push-config privacy. The app is also deployment-ready for a public HTTPS host: managed `DATABASE_URL`/TLS, proxy trust, hosted-origin allowlisting, and a Render blueprint. The suite covers 119 tests across 16 suites.
 >
 > Stealth mode (Step 6) remains available: the dashboard can be disguised as a calculator and notes utility. A user-defined 4–8 digit PIN is hashed with SHA-256 in the browser, typing it and pressing `=` silently triggers SOS, and `Ctrl`+`Shift`+`X` triggers from anywhere. Both paths record `stealth_pin` or `panic_hotkey` as the trigger source, and the decoy exits via a two-second header hold or `Ctrl`+`Shift`+`E`.
 >
@@ -82,7 +82,8 @@ This is an emergency-oriented web application and is engineered with strict safe
 - [x] 64 KB JSON/urlencoded request body limits and removal of the `X-Powered-By` header
 - [x] `Cache-Control: no-store` on all `/api` responses and a rate-limited public push-config endpoint
 - [x] Hardening regression tests for security headers, oversized payloads, malformed JSON, 404 privacy, and push-config exposure
-- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, Socket.IO, Dispatch Queue, Email, Web Push, SMS, Delivery Receipts, and Hardening (110 passing tests)
+- [x] Public deployment readiness: managed `DATABASE_URL` with TLS, proxy trust, hosted-origin allowlist, Render blueprint, and deployment guide
+- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, Socket.IO, Dispatch Queue, Email, Web Push, SMS, Delivery Receipts, Hardening, and Deployment configuration (119 passing tests)
 
 ### Planned for Future Milestones
 - ❌ PWA installability, offline capability, and queued alerts via IndexedDB
@@ -112,7 +113,8 @@ silent-sos_web_app/
 ├── server/                     # Backend Application (Node.js + Express)
 │   ├── src/
 │   │   ├── config/
-│   │   │   └── database.js     # PostgreSQL connection pool & health checker
+│   │   │   ├── database.js     # PostgreSQL pool, TLS & managed-URL config
+│   │   │   └── origins.js      # CORS / Socket.IO allowed-origin resolution
 │   │   ├── routes/
 │   │   │   ├── health.js       # Health check route (/api/v1/health)
 │   │   │   ├── auth.js         # Authentication routes (/api/v1/auth)
@@ -146,7 +148,8 @@ silent-sos_web_app/
 │   │   ├── webpush.test.js     # Push subscriptions, throttling & delivery tests
 │   │   ├── sms.test.js         # SMS content, normalization & transport tests
 │   │   ├── notifications.test.js # Delivery receipts API & tenant isolation tests
-│   │   └── hardening.test.js   # Headers, payload limits & hardening regression tests
+│   │   ├── hardening.test.js   # Headers, payload limits & hardening regression tests
+│   │   └── deployment.test.js  # Managed DB TLS & hosted-origin configuration tests
 │   ├── package.json
 │   └── .env.example
 ├── database/                   # Database Architecture (PostgreSQL + PostGIS)
@@ -171,8 +174,10 @@ silent-sos_web_app/
 │   └── README.md               # Detailed database & schema documentation
 ├── docs/                       # Technical & Architectural Documentation
 │   ├── architecture.md         # System architecture, ERD & component design
+│   ├── deployment.md           # Render + Neon deployment walkthrough
 │   ├── safety_constraints.md   # Critical safety & failure-handling constraints
 │   └── api_spec.md             # REST API specifications (/api/v1)
+├── render.yaml                 # Render blueprint (build, migrate, start, health)
 ├── .gitignore
 ├── .env.example                # Root environment template
 ├── package.json                # Root orchestration & DB scripts
@@ -184,7 +189,7 @@ silent-sos_web_app/
 ## 🚀 Getting Started
 
 ### Prerequisites
-- **Node.js**: v18.0.0 or higher
+- **Node.js**: v20.0.0 or higher
 - **npm**: v9.0.0 or higher
 - **PostgreSQL**: v18.6+ running locally on port 5432
 - **PostGIS**: v3.6.2+ installed on PostgreSQL
@@ -241,6 +246,35 @@ npm run dev:client
 ```bash
 npm test
 ```
+
+---
+
+## 🌍 Deploy a Live Instance
+
+The repository is deployment-ready for one Node host plus a managed PostgreSQL +
+PostGIS database. **Recommended:** Render (web service) + Neon (database), both
+with free starting tiers and automatic HTTPS.
+
+- Included blueprint: [`render.yaml`](render.yaml) — build, migrate, start, and
+  health check are preconfigured.
+- Full walkthrough: [`docs/deployment.md`](docs/deployment.md) — database setup,
+  secrets, phone access, notification providers, verification, and free-tier
+  caveats.
+
+Production environment essentials:
+
+| Variable | Purpose |
+| --- | --- |
+| `DATABASE_URL` | Managed Postgres URL; takes precedence over the discrete `DATABASE_*` values |
+| `DATABASE_SSL` | `true` for managed databases (TLS is auto-enabled for non-local hosts) |
+| `JWT_SECRET` | Long random signing secret |
+| `CORS_ORIGIN` | Public HTTPS origin(s); Render's own URL is allowed automatically |
+| `APP_BASE_URL` | Public URL used for email tracking links |
+| `TRUST_PROXY` | `1` when the host runs behind its reverse proxy |
+| `VAPID_*` | Persistent Web Push keys |
+| `SMTP_*` / `TWILIO_*` | Optional email and SMS delivery |
+
+Build: `npm run install:all && npm run build` · Start: `npm --prefix server run db:migrate && npm start`
 
 ---
 

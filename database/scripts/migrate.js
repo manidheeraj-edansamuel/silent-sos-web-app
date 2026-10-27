@@ -11,6 +11,10 @@ import fs from 'fs';
 import path from 'path';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
+import {
+  buildConnectionConfig,
+  describeDatabaseTarget,
+} from '../../server/src/config/database.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,28 +23,14 @@ dotenv.config({ path: path.resolve(__dirname, '../../server/.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 dotenv.config();
 
-if (process.env.DATABASE_PASSWORD && !process.env.PGPASSWORD) {
-  process.env.PGPASSWORD = process.env.DATABASE_PASSWORD;
-}
-
 const { Client } = pg;
 
-const dbHost = process.env.DATABASE_HOST || 'localhost';
-const dbPort = parseInt(process.env.DATABASE_PORT, 10) || 5432;
-const dbUser = process.env.DATABASE_USER || 'postgres';
-const dbPassword = process.env.DATABASE_PASSWORD || process.env.PGPASSWORD || '';
 const targetDb = process.env.DATABASE_NAME || 'silent_sos';
 
 export async function runMigrations() {
-  console.log(`[Migrations] Connecting to '${targetDb}' on ${dbHost}:${dbPort} as user '${dbUser}'...`);
+  console.log(`[Migrations] Connecting to ${describeDatabaseTarget()}...`);
 
-  const client = new Client({
-    host: dbHost,
-    port: dbPort,
-    user: dbUser,
-    password: () => process.env.DATABASE_PASSWORD ?? process.env.PGPASSWORD ?? '',
-    database: targetDb,
-  });
+  const client = new Client(buildConnectionConfig({ database: targetDb }));
 
   try {
     await client.connect();

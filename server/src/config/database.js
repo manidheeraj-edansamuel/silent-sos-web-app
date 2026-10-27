@@ -24,13 +24,77 @@ if (process.env.DATABASE_PASSWORD && !process.env.PGPASSWORD) {
 
 const { Pool } = pg;
 
+const LOCAL_HOST_PATTERN = /(?:^|[/@])(localhost|127\.0\.0\.1|\[?::1\]?)(?::|\/|$)/i;
+
+/**
+ * Resolve TLS options for the configured database target.
+ * Managed providers (Neon, Supabase, Render) require TLS; local Postgres does not.
+ * DATABASE_SSL accepts: true|require|verify-full (verify cert), no-verify (skip
+ * cert verification, for providers with private CAs), false|disable.
+ * @param {NodeJS.ProcessEnv} [env]
+ * @returns {false|{rejectUnauthorized: boolean}}
+ */
+export function resolveSslConfig(env = process.env) {
+  const mode = (env.DATABASE_SSL || '').trim().toLowerCase();
+  if (['false', 'disable', 'off'].includes(mode)) return false;
+  if (mode === 'no-verify') return { rejectUnauthorized: false };
+  if (['true', 'require', 'verify-full', 'verify-ca'].includes(mode)) {
+    return { rejectUnauthorized: true };
+  }
+
+  // Unset: enable TLS for anything that is not a loopback host.
+  const target = env.DATABASE_URL || env.DATABASE_HOST || 'localhost';
+  return LOCAL_HOST_PATTERN.test(target) ? false : { rejectUnauthorized: true };
+}
+
+/**
+ * Build connection options for pg.Pool / pg.Client.
+ * DATABASE_URL takes precedence over the discrete DATABASE_* variables.
+ * @param {{ database?: string, env?: NodeJS.ProcessEnv }} [options]
+ */
+export function buildConnectionConfig({ database, env = process.env } = {}) {
+  const ssl = resolveSslConfig(env);
+  const sslOption = ssl ? { ssl } : {};
+
+  if (env.DATABASE_URL) {
+    return { connectionString: env.DATABASE_URL, ...sslOption };
+  }
+
+  return {
+    host: env.DATABASE_HOST || 'localhost',
+    port: parseInt(env.DATABASE_PORT, 10) || 5432,
+    database: database || env.DATABASE_NAME || 'silent_sos',
+    user: env.DATABASE_USER || 'postgres',
+    password: env.DATABASE_PASSWORD ?? env.PGPASSWORD ?? '',
+    ...sslOption,
+  };
+}
+
+/**
+ * Password-free description of the configured target, safe for logs.
+ * @param {NodeJS.ProcessEnv} [env]
+ */
+export function describeDatabaseTarget(env = process.env) {
+  if (env.DATABASE_URL) {
+    try {
+      const url = new URL(env.DATABASE_URL);
+      return `${url.hostname}:${url.port || 5432}${url.pathname}`;
+    } catch {
+      return 'DATABASE_URL target';
+    }
+  }
+  const host = env.DATABASE_HOST || 'localhost';
+  const port = parseInt(env.DATABASE_PORT, 10) || 5432;
+  return `${host}:${port}/${env.DATABASE_NAME || 'silent_sos'}`;
+}
+
 // Connection options extracted strictly from environment variables
+const baseConnectionConfig = buildConnectionConfig();
 const poolConfig = {
-  host: process.env.DATABASE_HOST || 'localhost',
-  port: parseInt(process.env.DATABASE_PORT, 10) || 5432,
-  database: process.env.DATABASE_NAME || 'silent_sos',
-  user: process.env.DATABASE_USER || 'postgres',
-  password: () => process.env.DATABASE_PASSWORD ?? process.env.PGPASSWORD ?? '',
+  ...baseConnectionConfig,
+  ...(baseConnectionConfig.connectionString
+    ? {}
+    : { password: () => process.env.DATABASE_PASSWORD ?? process.env.PGPASSWORD ?? '' }),
   max: parseInt(process.env.DATABASE_POOL_MAX, 10) || 20,
   idleTimeoutMillis: parseInt(process.env.DATABASE_IDLE_TIMEOUT, 10) || 30000,
   connectionTimeoutMillis: parseInt(process.env.DATABASE_CONNECT_TIMEOUT, 10) || 3000,

@@ -10,6 +10,10 @@ import pg from 'pg';
 import dotenv from 'dotenv';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import {
+  buildConnectionConfig,
+  describeDatabaseTarget,
+} from '../../server/src/config/database.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -19,29 +23,33 @@ dotenv.config({ path: path.resolve(__dirname, '../../server/.env') });
 dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 dotenv.config();
 
-if (process.env.DATABASE_PASSWORD && !process.env.PGPASSWORD) {
-  process.env.PGPASSWORD = process.env.DATABASE_PASSWORD;
-}
-
 const { Client } = pg;
 
-const dbHost = process.env.DATABASE_HOST || 'localhost';
-const dbPort = parseInt(process.env.DATABASE_PORT, 10) || 5432;
-const dbUser = process.env.DATABASE_USER || 'postgres';
-const dbPassword = process.env.DATABASE_PASSWORD || process.env.PGPASSWORD || '';
 const targetDb = process.env.DATABASE_NAME || 'silent_sos';
 const maintenanceDb = process.env.DATABASE_MAINTENANCE_DB || 'postgres';
 
 async function initDatabase() {
-  console.log(`[DB Init] Checking if database '${targetDb}' exists on ${dbHost}:${dbPort}...`);
+  // Managed providers (Neon, Supabase, Render) create the database for you and
+  // expose it as DATABASE_URL, so only connection availability needs checking.
+  if (process.env.DATABASE_URL) {
+    console.log(`[DB Init] DATABASE_URL detected (${describeDatabaseTarget()}). Verifying connectivity...`);
+    const managedClient = new Client(buildConnectionConfig());
+    try {
+      await managedClient.connect();
+      await managedClient.query('SELECT 1;');
+      console.log('[DB Init] Connection verified. Managed database already exists.');
+    } catch (err) {
+      console.error('[DB Init Error]:', err.message);
+      process.exit(1);
+    } finally {
+      await managedClient.end();
+    }
+    return;
+  }
 
-  const client = new Client({
-    host: dbHost,
-    port: dbPort,
-    user: dbUser,
-    password: () => process.env.DATABASE_PASSWORD ?? process.env.PGPASSWORD ?? '',
-    database: maintenanceDb,
-  });
+  console.log(`[DB Init] Checking if database '${targetDb}' exists on ${describeDatabaseTarget()}...`);
+
+  const client = new Client(buildConnectionConfig({ database: maintenanceDb }));
 
   try {
     await client.connect();
