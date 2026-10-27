@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { checkDbHealth } from '../config/database.js';
 import { getEmailStatus } from '../services/emailService.js';
 import { getQueueStatus } from '../services/queueService.js';
+import { getPushConfig } from '../services/webPushService.js';
 
 const router = Router();
 
@@ -15,6 +16,7 @@ router.get('/', async (req, res) => {
   const dbHealth = await checkDbHealth();
   const queueStatus = await getQueueStatus();
   const emailStatus = getEmailStatus();
+  const pushStatus = getPushConfig();
   const isHealthy = dbHealth.isHealthy;
 
   const payload = {
@@ -29,10 +31,15 @@ router.get('/', async (req, res) => {
       database: isHealthy ? 'ok' : 'unavailable',
       queue: queueStatus.available ? 'ok' : 'unavailable',
       email: emailStatus.transport === 'none' ? 'unavailable' : 'ok',
+      push: pushStatus.enabled ? 'ok' : 'unavailable',
     },
     email: {
       transport: emailStatus.transport,
       smtp_configured: emailStatus.configured,
+    },
+    push: {
+      enabled: pushStatus.enabled,
+      vapid_configured: pushStatus.vapid_configured,
     },
   };
 

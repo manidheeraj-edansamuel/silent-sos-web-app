@@ -39,6 +39,17 @@ const breadcrumbIcon = L.divIcon({
   iconAnchor: [6, 6],
 });
 
+function urlBase64ToUint8Array(base64String) {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  const output = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i += 1) {
+    output[i] = rawData.charCodeAt(i);
+  }
+  return output;
+}
+
 export default function RecipientTrackingMap({ token, onBackToApp }) {
   // Alert Data State
   const [alert, setAlert] = useState(null);
@@ -50,6 +61,12 @@ export default function RecipientTrackingMap({ token, onBackToApp }) {
   const [fetchError, setFetchError] = useState(null);
   const [connectionStatus, setConnectionStatus] = useState('connecting'); // 'connecting' | 'connected' | 'reconnecting' | 'disconnected'
   const [lastUpdateReceived, setLastUpdateReceived] = useState(null);
+
+  // Web Push State
+  const [pushStatus, setPushStatus] = useState('checking'); // checking | available | subscribed | denied | error | unsupported | unavailable
+  const [pushBusy, setPushBusy] = useState(false);
+  const [pushMessage, setPushMessage] = useState('');
+  const pushPublicKeyRef = useRef(null);
 
   // Map & Socket Refs
   const mapContainerRef = useRef(null);
@@ -152,6 +169,62 @@ export default function RecipientTrackingMap({ token, onBackToApp }) {
   useEffect(() => {
     fetchAlertData();
   }, [fetchAlertData]);
+
+  // 1b. Inspect Web Push availability and restore any existing subscription
+  useEffect(() => {
+    if (!token) return undefined;
+
+    let cancelled = false;
+
+    async function inspectPushSupport() {
+      const supported =
+        window.isSecureContext &&
+        'serviceWorker' in navigator &&
+        'PushManager' in window &&
+        'Notification' in window;
+
+      if (!supported) {
+        setPushStatus('unsupported');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/v1/alerts/push/config', {
+          headers: { Accept: 'application/json' },
+        });
+        const data = await res.json();
+        if (cancelled) return;
+
+        if (!res.ok || !data?.data?.enabled || !data.data.public_key) {
+          setPushStatus('unavailable');
+          return;
+        }
+
+        pushPublicKeyRef.current = data.data.public_key;
+        const registration = await navigator.serviceWorker.register('/sw.js');
+        await navigator.serviceWorker.ready;
+        const existing = await registration.pushManager.getSubscription();
+        if (cancelled) return;
+
+        if (existing) {
+          setPushStatus('subscribed');
+          setPushMessage('This device is registered for emergency updates.');
+        } else if (Notification.permission === 'denied') {
+          setPushStatus('denied');
+        } else {
+          setPushStatus('available');
+        }
+      } catch {
+        if (!cancelled) setPushStatus('error');
+      }
+    }
+
+    inspectPushSupport();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   // 2. Initialize Leaflet Map Instance
   // The first render is the loading state (no map div in DOM), so initialization
@@ -375,6 +448,74 @@ export default function RecipientTrackingMap({ token, onBackToApp }) {
     };
   }, [token, fetchError, fetchAlertData]);
 
+  // Web Push Opt-In / Opt-Out
+  const handleEnablePush = async () => {
+    if (pushBusy) return;
+    setPushBusy(true);
+    setPushMessage('');
+
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== 'granted') {
+        setPushStatus('denied');
+        setPushMessage('Notification permission was not granted.');
+        return;
+      }
+
+      const registration = await navigator.serviceWorker.ready;
+      let subscription = await registration.pushManager.getSubscription();
+      if (!subscription) {
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(pushPublicKeyRef.current),
+        });
+      }
+
+      const res = await fetch(
+        `/api/v1/alerts/track/${encodeURIComponent(token)}/push-subscriptions`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ subscription: subscription.toJSON() }),
+        }
+      );
+
+      if (!res.ok) throw new Error('push_registration_failed');
+
+      setPushStatus('subscribed');
+      setPushMessage('This device will now receive emergency updates.');
+    } catch {
+      setPushStatus('error');
+      setPushMessage('Could not enable notifications on this device. Keep this tab open for live updates.');
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
+  const handleDisablePush = async () => {
+    if (pushBusy) return;
+    setPushBusy(true);
+
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      const subscription = await registration.pushManager.getSubscription();
+      if (subscription) {
+        await fetch(`/api/v1/alerts/track/${encodeURIComponent(token)}/push-subscriptions`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ endpoint: subscription.endpoint }),
+        }).catch(() => null);
+        await subscription.unsubscribe();
+      }
+      setPushStatus('available');
+      setPushMessage('Push notifications are disabled on this device.');
+    } catch {
+      setPushMessage('Could not disable notifications here. You can revoke them in your browser settings.');
+    } finally {
+      setPushBusy(false);
+    }
+  };
+
   // Center Map View Helper
   const handleRecenter = () => {
     if (mapInstanceRef.current && currentLocation) {
@@ -562,6 +703,46 @@ export default function RecipientTrackingMap({ token, onBackToApp }) {
             </div>
           </div>
 
+          {/* Web Push Opt-In Card */}
+          {!isResolved && !['checking', 'unsupported', 'unavailable'].includes(pushStatus) && (
+            <div className="tracking-sidebar-card push-notification-card">
+              <h2 className="sidebar-card-title">Emergency Push Alerts</h2>
+              <p className="push-card-description">
+                Get notified on this device when the live location changes or the alert is resolved,
+                even if this tab is closed. Notifications stop when the alert ends.
+              </p>
+              {pushStatus === 'subscribed' ? (
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={handleDisablePush}
+                  disabled={pushBusy}
+                >
+                  {pushBusy ? 'Updating...' : 'Disable on this device'}
+                </button>
+              ) : (
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={handleEnablePush}
+                  disabled={pushBusy || pushStatus === 'denied'}
+                >
+                  {pushBusy
+                    ? 'Enabling...'
+                    : pushStatus === 'denied'
+                    ? 'Notifications Blocked'
+                    : pushStatus === 'error'
+                    ? 'Retry Enabling Push'
+                    : 'Enable Push Notifications'}
+                </button>
+              )}
+              {pushMessage && <p className="push-card-status">{pushMessage}</p>}
+              {pushStatus === 'denied' && !pushMessage && (
+                <p className="push-card-status">
+                  Allow notifications in your browser's site settings, then reload this page.
+                </p>
+              )}
+            </div>
+          )}
+
           {/* Live GPS Coordinates Card */}
           <div className="tracking-sidebar-card">
             <h2 className="sidebar-card-title">Latest Location Telemetry</h2>
@@ -635,7 +816,7 @@ export default function RecipientTrackingMap({ token, onBackToApp }) {
 
       {/* Footer */}
       <footer className="tracking-footer">
-        <p>Silent SOS Emergency Web App • Step 5: Recipient Tracking & Real-Time Gateway</p>
+        <p>Silent SOS Emergency Web App • Step 5C &amp; Phase C: Recipient Tracking, Real-Time Gateway &amp; Push Alerts</p>
         <p style={{ marginTop: '0.25rem', color: 'var(--text-muted)' }}>
           Map data &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors • WebSocket telemetry streaming via Socket.IO
         </p>

@@ -17,9 +17,13 @@ This is an emergency-oriented web application and is engineered with strict safe
 
 ## 🏗️ Incremental Development Status
 
-> **Current Phase: Phase C — Email Notification Channel (Completed)**
+> **Current Phase: Phase C — Email & Web Push Notification Channels (Completed)**
 > 
-> Emergency emails are now delivered by the `alert.dispatch` pg-boss worker. When an SOS alert is triggered, every emergency contact with an email address receives a private live-tracking link (`/?track=<token>`). Delivery uses SMTP when configured and nodemailer's JSON transport in development, so local development and tests never require a mail server. Recipient addresses and raw tracking tokens are never logged or written to audit records; dispatch jobs carrying the raw token are purged after one hour, and the database still stores only the SHA-256 token hash. All-failed deliveries retry with exponential backoff, and each attempt records a per-channel delivery summary. The suite covers 82 tests across 11 suites.
+> Emergency emails are delivered by the `alert.dispatch` pg-boss worker. When an SOS alert is triggered, every emergency contact with an email address receives a private live-tracking link (`/?track=<token>`). Delivery uses SMTP when configured and nodemailer's JSON transport in development, so local development and tests never require a mail server.
+>
+> Recipients viewing the tracking portal can opt into browser push notifications. The portal registers a service worker, subscribes with a VAPID key, and pushes are scoped to that single alert. Live location updates are throttled (`PUSH_LOCATION_INTERVAL_SECONDS`, default 120 seconds) and a final notification fires on resolution. Click-through URLs are rebuilt from per-subscription encrypted tracking tokens (AES-256-GCM), so plaintext tokens are never stored; stale endpoints (403/404/410) are deleted automatically, and all subscriptions are removed once the alert is resolved.
+>
+> Recipient addresses, push endpoints, and raw tracking tokens are never logged or written to audit records; dispatch jobs carrying the raw token are purged after one hour, and the database still stores only the SHA-256 token hash for alert lookup. All-failed email deliveries retry with exponential backoff, and each dispatch records a per-channel delivery summary. The suite covers 90 tests across 12 suites.
 
 ### Completed in Steps 1–5C
 - [x] Multi-package workspace directory structure (`client/`, `server/`, `database/`, `docs/`)
@@ -58,11 +62,17 @@ This is an emergency-oriented web application and is engineered with strict safe
 - [x] Per-channel delivery summaries in audit events (counts + contact IDs, never recipient addresses or tokens)
 - [x] Email transport visibility in `/api/v1/health` and `APP_BASE_URL`-aware tracking links
 - [x] Tracking-token redaction in HTTP request logs (`/alerts/track/:token` and `?track=...`)
+- [x] Web Push channel with VAPID keys and a `push`/`notificationclick` service worker (`client/public/sw.js`)
+- [x] Alert-scoped push subscriptions (`push_subscriptions`, migration 010) authorized by raw tracking token
+- [x] Per-subscription AES-256-GCM encrypted tracking tokens for push click-through (no plaintext tokens at rest)
+- [x] Throttled live-location pushes and a final resolution push with automatic stale-endpoint cleanup
+- [x] Recipient opt-in / opt-out push card in the tracking portal with graceful blocked/unsupported states
+- [x] Push configuration visibility in `/api/v1/health` and `GET /api/v1/alerts/push/config`
 - [x] Single-service production deployment (Express serves `client/dist` with SPA fallback and CSP for map tiles/WebSockets)
-- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, Socket.IO, Dispatch Queue, and Email (82 passing tests)
+- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, Socket.IO, Dispatch Queue, Email, and Web Push (90 passing tests)
 
 ### Planned for Future Milestones (Phase C+)
-- ❌ Phase C: SMS (Twilio) and Web Push delivery channels
+- ❌ Phase C: SMS (Twilio) delivery channel
 - ❌ Phase C: Recipient notification preferences and delivery receipts UI
 - ❌ Step 6: Stealth mode decoy calculator/notes UI & panic hotkeys — *Step 6*
 
@@ -73,7 +83,7 @@ This is an emergency-oriented web application and is engineered with strict safe
 ```text
 silent-sos_web_app/
 ├── client/                     # Frontend Application (React + Vite)
-│   ├── public/                 # Static web assets
+│   ├── public/                 # Static web assets (sw.js service worker)
 │   ├── src/
 │   │   ├── App.jsx             # Root UI with SOS trigger, contacts & auth
 │   │   ├── main.jsx            # Application entry point
@@ -100,7 +110,8 @@ silent-sos_web_app/
 │   │   │   ├── tokenService.js    # JWT generation & verification
 │   │   │   ├── socketService.js   # Socket.IO real-time location gateway
 │   │   │   ├── queueService.js    # pg-boss alert dispatch worker
-│   │   │   └── emailService.js    # SMTP/JSON alert email delivery
+│   │   │   ├── emailService.js    # SMTP/JSON alert email delivery
+│   │   │   └── webPushService.js  # VAPID web push delivery, throttling & token encryption
 │   │   ├── app.js              # Express app setup & middleware
 │   │   └── server.js           # HTTP & Socket.IO server bootstrap
 │   ├── tests/
@@ -112,11 +123,12 @@ silent-sos_web_app/
 │   │   ├── alerts.test.js      # Emergency alerts & location test
 │   │   ├── socket.test.js      # Real-time Socket.IO gateway tests
 │   │   ├── queue.test.js       # pg-boss dispatch queue integration tests
-│   │   └── email.test.js       # Email template, escaping & transport tests
+│   │   ├── email.test.js       # Email template, escaping & transport tests
+│   │   └── webpush.test.js     # Push subscriptions, throttling & delivery tests
 │   ├── package.json
 │   └── .env.example
 ├── database/                   # Database Architecture (PostgreSQL + PostGIS)
-│   ├── migrations/             # Deterministic SQL migration files (001 - 009)
+│   ├── migrations/             # Deterministic SQL migration files (001 - 010)
 │   │   ├── 001_enable_extensions.sql
 │   │   ├── 002_create_users.sql
 │   │   ├── 003_create_emergency_contacts.sql
@@ -125,7 +137,8 @@ silent-sos_web_app/
 │   │   ├── 006_create_alert_events.sql
 │   │   ├── 007_create_notification_attempts.sql
 │   │   ├── 008_add_user_authentication.sql
-│   │   └── 009_add_tracking_token_to_alerts.sql
+│   │   ├── 009_add_tracking_token_to_alerts.sql
+│   │   └── 010_create_push_subscriptions.sql
 │   ├── seeds/
 │   │   └── 001_dev_seed.sql    # Development mock baseline data
 │   ├── scripts/
@@ -179,7 +192,7 @@ DATABASE_PASSWORD=your_password_here
 # Create database if it does not exist
 npm run db:init
 
-# Apply migrations 001 through 007 in order
+# Apply migrations 001 through 010 in order
 npm run db:migrate
 
 # Populate development mock seed data

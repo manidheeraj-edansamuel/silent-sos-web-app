@@ -13,6 +13,12 @@ import { authenticateToken } from '../middleware/auth.js';
 import { trackingRateLimiter } from '../middleware/rateLimiter.js';
 import { emitLocationUpdate, emitStatusUpdate } from '../services/socketService.js';
 import { enqueueAlertDispatch } from '../services/queueService.js';
+import {
+  getPushConfig,
+  encryptTrackingToken,
+  notifyLocationUpdate,
+  notifyAlertResolved,
+} from '../services/webPushService.js';
 
 const router = Router();
 
@@ -149,6 +155,186 @@ router.get('/track/:token', trackingRateLimiter, async (req, res, next) => {
           locations: locations,
         },
       },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * Resolves a raw tracking token to its alert. Sends the error response and
+ * returns null when the token is malformed or unknown.
+ */
+async function resolveTrackedAlert(req, res) {
+  const token = req.params.token;
+
+  if (!token || typeof token !== 'string' || !TRACKING_TOKEN_REGEX.test(token)) {
+    res.status(400).json({
+      status: 'error',
+      message: 'Validation error: Invalid tracking token format.',
+    });
+    return null;
+  }
+
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const result = await query(
+    `SELECT id, status FROM alerts WHERE tracking_token_hash = $1;`,
+    [tokenHash]
+  );
+
+  if (result.rowCount === 0) {
+    res.status(404).json({
+      status: 'error',
+      message: 'Emergency tracking session not found or link has expired.',
+    });
+    return null;
+  }
+
+  return result.rows[0];
+}
+
+function validatePushSubscription(body) {
+  const subscription = body?.subscription;
+  const errors = [];
+  const endpoint = subscription?.endpoint;
+  const p256dh = subscription?.keys?.p256dh;
+  const auth = subscription?.keys?.auth;
+  const keyPattern = /^[A-Za-z0-9_-]{16,255}={0,2}$/;
+
+  if (typeof endpoint !== 'string' || endpoint.length === 0 || endpoint.length > 2048) {
+    errors.push('subscription.endpoint is required and must not exceed 2048 characters.');
+  } else {
+    try {
+      if (new URL(endpoint).protocol !== 'https:') {
+        errors.push('subscription.endpoint must use HTTPS.');
+      }
+    } catch {
+      errors.push('subscription.endpoint must be a valid URL.');
+    }
+  }
+
+  if (typeof p256dh !== 'string' || !keyPattern.test(p256dh)) {
+    errors.push('subscription.keys.p256dh is invalid.');
+  }
+
+  if (typeof auth !== 'string' || !keyPattern.test(auth)) {
+    errors.push('subscription.keys.auth is invalid.');
+  }
+
+  const rawExpiration = Number(subscription?.expirationTime);
+  const expirationTime =
+    Number.isFinite(rawExpiration) && rawExpiration > 0 ? rawExpiration : null;
+
+  return { errors, endpoint, p256dh, auth, expirationTime };
+}
+
+/**
+ * GET /api/v1/alerts/push/config
+ * Public Web Push configuration for the recipient portal.
+ * Exposes only the VAPID public key; private keys stay server-side.
+ */
+router.get('/push/config', (req, res) => {
+  return res.status(200).json({
+    status: 'ok',
+    data: getPushConfig(),
+  });
+});
+
+/**
+ * POST /api/v1/alerts/track/:token/push-subscriptions
+ * Registers a browser push subscription for one alert. The tracking token
+ * authorizes the request; the raw token is stored encrypted with the row so
+ * notification click-through links can be rebuilt later.
+ */
+router.post('/track/:token/push-subscriptions', trackingRateLimiter, async (req, res, next) => {
+  try {
+    const alert = await resolveTrackedAlert(req, res);
+    if (!alert) return;
+
+    if (alert.status !== 'active') {
+      return res.status(409).json({
+        status: 'error',
+        message: 'Push notifications are only available while the alert is active.',
+      });
+    }
+
+    const { errors, endpoint, p256dh, auth, expirationTime } = validatePushSubscription(req.body);
+    if (errors.length > 0) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors,
+      });
+    }
+
+    const result = await query(
+      `INSERT INTO push_subscriptions (
+         alert_id, endpoint, p256dh, auth, expiration_time,
+         tracking_token_encrypted, user_agent, created_at, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+       ON CONFLICT (alert_id, endpoint) DO UPDATE SET
+         p256dh = EXCLUDED.p256dh,
+         auth = EXCLUDED.auth,
+         expiration_time = EXCLUDED.expiration_time,
+         tracking_token_encrypted = EXCLUDED.tracking_token_encrypted,
+         user_agent = EXCLUDED.user_agent,
+         updated_at = NOW()
+       RETURNING id, created_at, updated_at;`,
+      [
+        alert.id,
+        endpoint,
+        p256dh,
+        auth,
+        expirationTime,
+        encryptTrackingToken(req.params.token),
+        (req.get('user-agent') || '').slice(0, 512),
+      ]
+    );
+
+    return res.status(201).json({
+      status: 'ok',
+      message: 'Push subscription registered successfully.',
+      data: {
+        subscription: {
+          id: result.rows[0].id,
+          created_at: result.rows[0].created_at,
+          updated_at: result.rows[0].updated_at,
+        },
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
+ * DELETE /api/v1/alerts/track/:token/push-subscriptions
+ * Removes a browser push subscription for the alert identified by the token.
+ */
+router.delete('/track/:token/push-subscriptions', trackingRateLimiter, async (req, res, next) => {
+  try {
+    const alert = await resolveTrackedAlert(req, res);
+    if (!alert) return;
+
+    const endpoint = req.body?.endpoint;
+    if (typeof endpoint !== 'string' || endpoint.length === 0 || endpoint.length > 2048) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation failed',
+        errors: ['endpoint is required and must not exceed 2048 characters.'],
+      });
+    }
+
+    await query(
+      `DELETE FROM push_subscriptions WHERE alert_id = $1 AND endpoint = $2;`,
+      [alert.id, endpoint]
+    );
+
+    // Always report success so callers cannot probe for subscription existence.
+    return res.status(200).json({
+      status: 'ok',
+      message: 'Push subscription removed.',
     });
   } catch (err) {
     next(err);
@@ -540,6 +726,12 @@ router.post('/:id/location', async (req, res, next) => {
       logged_at: locationData.logged_at,
     });
 
+    // Best-effort push for recipients whose portal tab is closed. Throttled by
+    // the push service and never blocks the breadcrumb response.
+    notifyLocationUpdate(alertId, locationData).catch((pushErr) => {
+      console.error('[WebPush] Location notification failed:', pushErr.message);
+    });
+
     return res.status(200).json({
       status: 'ok',
       message: 'Location breadcrumb recorded successfully.',
@@ -634,6 +826,12 @@ router.post('/:id/resolve', async (req, res, next) => {
     emitStatusUpdate(alertId, {
       status: 'resolved',
       resolved_at: resolvedAlert.resolved_at,
+    });
+
+    // Best-effort final push to subscribed recipients; failure must not affect
+    // the resolution response.
+    notifyAlertResolved(alertId).catch((pushErr) => {
+      console.error('[WebPush] Resolution notification failed:', pushErr.message);
     });
 
     return res.status(200).json({

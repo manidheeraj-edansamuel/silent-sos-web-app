@@ -562,10 +562,10 @@ export default function App() {
     },
     {
       step: 'Step 5',
-      name: 'Real-time Gateway & Notification Queues',
-      status: 'Planned',
-      state: 'planned',
-      desc: 'Socket.IO live coordinate stream, BullMQ queues, SMS/Email delivery.',
+      name: 'Real-time Gateway & Notification Channels',
+      status: 'Completed',
+      state: 'completed',
+      desc: 'Socket.IO live telemetry, pg-boss dispatch queue, email and browser push delivery.',
     },
   ];
 

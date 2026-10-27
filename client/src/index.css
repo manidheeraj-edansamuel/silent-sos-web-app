@@ -1258,6 +1258,29 @@ body {
   font-weight: normal;
 }
 
+/* Web Push Opt-In Card */
+.push-notification-card {
+  border-left: 3px solid var(--accent-green);
+}
+
+.push-card-description {
+  margin: 0;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-muted);
+}
+
+.push-notification-card .btn {
+  align-self: flex-start;
+}
+
+.push-card-status {
+  margin: 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--accent-green);
+}
+
 /* Coords Grid */
 .sidebar-coords-grid {
   display: grid;

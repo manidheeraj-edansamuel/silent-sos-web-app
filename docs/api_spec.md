@@ -700,10 +700,78 @@ Emitted immediately after an emergency alert is marked as resolved via `POST /ap
 
 ---
 
-## 4. Planned Routes for Future Milestones
+## 4. Web Push Subscription API — Phase C (Implemented)
 
-### Notification Queues & Recipient Map Portal — *Step 5C & Step 6*
-- Interactive Leaflet map recipient tracking portal with live GPS breadcrumb rendering
-- BullMQ asynchronous worker pipeline backed by Redis
-- Multi-channel notification delivery (SMS via Twilio, Email via SES/SendGrid)
+These public endpoints let a recipient of a tracking link opt into browser push notifications for that single alert. The raw tracking token authorizes both endpoints and is never echoed back.
+
+### `GET /api/v1/alerts/push/config`
+Returns the VAPID public key and whether push is enabled. Only the public key is exposed.
+```json
+{
+  "status": "ok",
+  "data": {
+    "enabled": true,
+    "public_key": "BEl6...",
+    "vapid_configured": false
+  }
+}
+```
+- `vapid_configured` is `false` when development uses ephemeral keys; production refuses to start push without real VAPID keys.
+- `429 Too Many Requests` applies via `trackingRateLimiter`.
+
+### `POST /api/v1/alerts/track/:token/push-subscriptions`
+Registers (or refreshes) a browser `PushSubscription` for the alert identified by the token.
+- **Request body**:
+```json
+{
+  "subscription": {
+    "endpoint": "https://fcm.googleapis.com/fcm/send/abc123",
+    "expirationTime": null,
+    "keys": {
+      "p256dh": "BNcRd...",
+      "auth": "tBHIt..."
+    }
+  }
+}
+```
+- **`201 Created`**: `endpoint`, keys, and the raw token are never returned.
+```json
+{
+  "status": "ok",
+  "message": "Push subscription registered successfully.",
+  "data": {
+    "subscription": {
+      "id": "d4c1...",
+      "created_at": "2026-10-27T07:00:00.000Z",
+      "updated_at": "2026-10-27T07:00:00.000Z"
+    }
+  }
+}
+```
+- **`400 Bad Request`**: invalid token format or subscription (endpoint must be HTTPS, ≤ 2048 chars; `p256dh`/`auth` must be base64url).
+- **`404 Not Found`**: unknown or expired tracking link.
+- **`409 Conflict`**: the alert is no longer active, so push opt-in is rejected.
+- Re-registering the same endpoint for the same alert updates the existing row (unique on `alert_id, endpoint`) instead of duplicating it.
+
+### `DELETE /api/v1/alerts/track/:token/push-subscriptions`
+Removes a subscription.
+- **Request body**: `{ "endpoint": "https://fcm.googleapis.com/fcm/send/abc123" }`
+- **`200 OK`**: always returned even if no row matched, so callers cannot probe for subscription existence.
+
+### Delivery Behavior
+- `location_update` pushes are throttled per subscription by `last_notified_at` (`PUSH_LOCATION_INTERVAL_SECONDS`, default 120 seconds).
+- A `resolved` push is sent once when the alert is resolved, after which all subscriptions for the alert are deleted.
+- Subscription endpoints returning `403`, `404`, or `410` are deleted automatically as stale.
+- Click-through URLs are rebuilt from per-subscription AES-256-GCM encrypted tracking tokens; plaintext tokens are never stored.
+
+---
+
+## 5. Planned Routes for Future Milestones
+
+### Notification Channels & Stealth Mode — *Phase C+ / Step 6*
+- SMS delivery channel via Twilio
+- Recipient notification preferences and delivery receipts UI
+- Interactive Leaflet map recipient tracking portal with live GPS breadcrumb rendering *(Step 5C — completed)*
+- pg-boss asynchronous worker pipeline over PostgreSQL *(Step 5C — completed)*
+- Email and Web Push notification channels *(Phase C — completed)*
 - Stealth mode decoy calculator/notes UI and panic hotkeys
