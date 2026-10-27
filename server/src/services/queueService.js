@@ -12,6 +12,8 @@ import { PgBoss } from 'pg-boss';
 import { query } from '../config/database.js';
 import { getIO } from './socketService.js';
 import { getEmailStatus, sendAlertEmail } from './emailService.js';
+import { getSmsStatus, sendAlertSms } from './smsService.js';
+import { recordNotificationAttempt, sanitizeErrorMessage } from './notificationLedger.js';
 
 export const ALERT_DISPATCH_QUEUE = 'alert.dispatch';
 
@@ -46,7 +48,7 @@ function buildConnectionOptions() {
  * Partial failures are tolerated (already-delivered recipients are not emailed
  * twice); a retry is only requested when every attempted send failed.
  */
-async function dispatchEmails({ alert, trackingToken }) {
+async function dispatchEmails({ alert, trackingToken, attemptNumber = 1 }) {
   const summary = {
     attempted: false,
     transport: getEmailStatus().transport,
@@ -70,7 +72,10 @@ async function dispatchEmails({ alert, trackingToken }) {
   const contacts = await query(
     `SELECT id, contact_email
      FROM emergency_contacts
-     WHERE user_id = $1 AND contact_email IS NOT NULL AND TRIM(contact_email) <> ''
+     WHERE user_id = $1
+       AND notify_email = TRUE
+       AND contact_email IS NOT NULL
+       AND TRIM(contact_email) <> ''
      ORDER BY priority_order ASC, created_at ASC;`,
     [alert.user_id]
   );
@@ -93,16 +98,149 @@ async function dispatchEmails({ alert, trackingToken }) {
       if (result.status === 'sent') {
         summary.sent += 1;
         summary.recipient_contact_ids.push(contact.id);
+        await recordNotificationAttempt({
+          alertId: alert.id,
+          contactId: contact.id,
+          channel: 'email',
+          destination: contact.contact_email,
+          status: 'sent',
+          providerMessageId: result.messageId,
+          attemptNumber,
+        });
       } else {
         summary.skipped += 1;
         if (!summary.skip_reasons.includes(result.reason)) {
           summary.skip_reasons.push(result.reason);
         }
+        await recordNotificationAttempt({
+          alertId: alert.id,
+          contactId: contact.id,
+          channel: 'email',
+          destination: contact.contact_email,
+          status: 'skipped',
+          attemptNumber,
+          errorMessage: result.reason,
+        });
       }
     } catch (err) {
       summary.failed += 1;
+      const safeError = sanitizeErrorMessage(err.message, [contact.contact_email, trackingToken]);
       // Log the contact id only — recipient addresses and tokens are private.
-      console.error(`[Email] Delivery failed for contact ${contact.id}:`, err.message);
+      console.error(`[Email] Delivery failed for contact ${contact.id}:`, safeError);
+      await recordNotificationAttempt({
+        alertId: alert.id,
+        contactId: contact.id,
+        channel: 'email',
+        destination: contact.contact_email,
+        status: 'failed',
+        attemptNumber,
+        errorMessage: safeError,
+      });
+    }
+  }
+
+  const shouldRetry = summary.failed > 0 && summary.sent === 0;
+  return { summary, shouldRetry };
+}
+
+/**
+ * Sends the emergency SMS to every contact that opted into SMS and has a valid
+ * phone number on file. Mirrors the email channel's partial-failure policy.
+ */
+async function dispatchSms({ alert, trackingToken, attemptNumber = 1 }) {
+  const status = getSmsStatus();
+  const summary = {
+    attempted: false,
+    transport: status.transport,
+    sent: 0,
+    failed: 0,
+    skipped: 0,
+    recipient_contact_ids: [],
+    skip_reasons: [],
+  };
+
+  if (alert.status !== 'active') {
+    summary.skip_reasons.push('alert_not_active');
+    return { summary, shouldRetry: false };
+  }
+
+  if (!trackingToken) {
+    summary.skip_reasons.push('missing_tracking_token');
+    return { summary, shouldRetry: false };
+  }
+
+  if (!status.configured) {
+    summary.skip_reasons.push('sms_not_configured');
+    return { summary, shouldRetry: false };
+  }
+
+  const contacts = await query(
+    `SELECT id, contact_phone
+     FROM emergency_contacts
+     WHERE user_id = $1
+       AND notify_sms = TRUE
+       AND contact_phone IS NOT NULL
+       AND TRIM(contact_phone) <> ''
+     ORDER BY priority_order ASC, created_at ASC;`,
+    [alert.user_id]
+  );
+
+  summary.attempted = true;
+  if (contacts.rowCount === 0) {
+    summary.skip_reasons.push('no_sms_contacts');
+    return { summary, shouldRetry: false };
+  }
+
+  for (const contact of contacts.rows) {
+    try {
+      const result = await sendAlertSms({
+        to: contact.contact_phone,
+        victimName: alert.victim_name,
+        triggeredAt: alert.triggered_at,
+        trackingToken,
+      });
+
+      if (result.status === 'sent') {
+        summary.sent += 1;
+        summary.recipient_contact_ids.push(contact.id);
+        await recordNotificationAttempt({
+          alertId: alert.id,
+          contactId: contact.id,
+          channel: 'sms',
+          destination: contact.contact_phone,
+          status: 'sent',
+          providerMessageId: result.messageId,
+          attemptNumber,
+        });
+      } else {
+        summary.skipped += 1;
+        if (!summary.skip_reasons.includes(result.reason)) {
+          summary.skip_reasons.push(result.reason);
+        }
+        await recordNotificationAttempt({
+          alertId: alert.id,
+          contactId: contact.id,
+          channel: 'sms',
+          destination: contact.contact_phone,
+          status: 'skipped',
+          attemptNumber,
+          errorMessage: result.reason,
+        });
+      }
+    } catch (err) {
+      summary.failed += 1;
+      const safeError = sanitizeErrorMessage(err.message, [contact.contact_phone, trackingToken]);
+      // Log the contact id only — phone numbers and tokens are private.
+      console.error(`[SMS] Delivery failed for contact ${contact.id}:`, safeError);
+      await recordNotificationAttempt({
+        alertId: alert.id,
+        contactId: contact.id,
+        channel: 'sms',
+        destination: contact.contact_phone,
+        status: 'failed',
+        attemptNumber,
+        errorMessage: safeError,
+      });
     }
   }
 
@@ -148,10 +286,19 @@ async function processDispatchJobs(jobs) {
       });
     }
 
-    const { summary: emailSummary, shouldRetry } = await dispatchEmails({
-      alert,
-      trackingToken: job.data?.trackingToken,
-    });
+    const attemptNumber = job.retryCount + 1;
+    const trackingToken = job.data?.trackingToken;
+
+    const emailResult = await dispatchEmails({ alert, trackingToken, attemptNumber });
+    const smsResult = await dispatchSms({ alert, trackingToken, attemptNumber });
+
+    const totalSent = emailResult.summary.sent + smsResult.summary.sent;
+    const attemptedDeliveries =
+      emailResult.summary.sent +
+      emailResult.summary.failed +
+      smsResult.summary.sent +
+      smsResult.summary.failed;
+    const shouldRetry = attemptedDeliveries > 0 && totalSent === 0;
 
     await query(
       `INSERT INTO alert_events (alert_id, event_type, event_data, created_at)
@@ -159,10 +306,11 @@ async function processDispatchJobs(jobs) {
       [
         alertId,
         JSON.stringify({
-          channels: ['realtime', 'email'],
+          channels: ['realtime', 'email', 'sms'],
           realtime: { emitted: realtimeEmitted },
-          email: emailSummary,
-          attempt: job.retryCount + 1,
+          email: emailResult.summary,
+          sms: smsResult.summary,
+          attempt: attemptNumber,
           job_id: job.id,
         }),
       ]
@@ -170,7 +318,7 @@ async function processDispatchJobs(jobs) {
 
     if (shouldRetry) {
       throw new Error(
-        `Email dispatch failed for all ${emailSummary.failed} recipient(s) of alert ${alertId}`
+        `Notification dispatch failed for all attempted recipients of alert ${alertId}`
       );
     }
   }

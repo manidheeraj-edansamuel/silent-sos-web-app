@@ -33,8 +33,11 @@ describe('Phase B: Asynchronous Dispatch Queue (pg-boss)', () => {
     dbAvailable = health.isHealthy;
     if (!dbAvailable) return;
 
-    // Deterministic fallback: never attempt real SMTP from the test suite.
+    // Deterministic fallback: never attempt real SMTP or Twilio from the test suite.
     delete process.env.SMTP_HOST;
+    delete process.env.TWILIO_ACCOUNT_SID;
+    delete process.env.TWILIO_AUTH_TOKEN;
+    delete process.env.TWILIO_FROM_NUMBER;
 
     try {
       await initQueueService();
@@ -122,6 +125,7 @@ describe('Phase B: Asynchronous Dispatch Queue (pg-boss)', () => {
     assert.ok(Array.isArray(data.channels), 'audit event should list attempted channels');
     assert.ok(data.channels.includes('realtime'));
     assert.ok(data.channels.includes('email'));
+    assert.ok(data.channels.includes('sms'));
     assert.ok(data.job_id, 'audit event should reference the pg-boss job id');
 
     // Phase C: the seeded emergency contact must receive the alert email.
@@ -129,6 +133,24 @@ describe('Phase B: Asynchronous Dispatch Queue (pg-boss)', () => {
     assert.equal(data.email.sent, 1, 'expected exactly one email to be delivered');
     assert.equal(data.email.failed, 0);
     assert.deepEqual(data.email.recipient_contact_ids, [contactId]);
+
+    // SMS is unavailable without Twilio credentials and must be reported, not faked.
+    assert.equal(data.sms.attempted, false);
+    assert.equal(data.sms.transport, 'none');
+    assert.ok(data.sms.skip_reasons.includes('sms_not_configured'));
+
+    // Delivery ledger: destinations are masked before storage.
+    const ledger = await query(
+      `SELECT channel, destination, status, provider_message_id, delivered_at
+       FROM notification_attempts
+       WHERE alert_id = $1 AND emergency_contact_id = $2 AND channel = 'email';`,
+      [alertId, contactId]
+    );
+    assert.equal(ledger.rowCount, 1, 'expected one email receipt');
+    assert.equal(ledger.rows[0].status, 'sent');
+    assert.ok(ledger.rows[0].destination.includes('***@'), 'email destination must be masked');
+    assert.ok(!ledger.rows[0].destination.includes('queue.recipient'), 'raw address must not be stored');
+    assert.ok(ledger.rows[0].delivered_at, 'sent receipts must record delivered_at');
   });
 
   test('3. Queue depth reports job counts after processing', async () => {

@@ -458,6 +458,95 @@ router.get('/active', async (req, res, next) => {
 });
 
 /**
+ * GET /api/v1/alerts/:id/notifications
+ * Delivery receipts for one alert owned by the authenticated user.
+ * Destinations are stored masked by the dispatch worker, so owners never
+ * receive a second copy of contact PII from this endpoint.
+ */
+router.get('/:id/notifications', async (req, res, next) => {
+  try {
+    const userId = req.user.id;
+    const alertId = req.params.id;
+
+    if (!UUID_REGEX.test(alertId)) {
+      return res.status(400).json({
+        status: 'error',
+        message: 'Validation error: alert id must be a valid UUID.',
+      });
+    }
+
+    const ownership = await query(
+      'SELECT id, status, triggered_at FROM alerts WHERE id = $1 AND user_id = $2;',
+      [alertId, userId]
+    );
+
+    if (ownership.rowCount === 0) {
+      return res.status(404).json({
+        status: 'error',
+        message: 'Emergency alert not found.',
+      });
+    }
+
+    const result = await query(
+      `SELECT na.id, na.channel, na.destination, na.status, na.provider_message_id,
+              na.attempt_number, na.error_message, na.attempted_at, na.delivered_at,
+              ec.id AS contact_id, ec.contact_name
+       FROM notification_attempts na
+       LEFT JOIN emergency_contacts ec ON ec.id = na.emergency_contact_id
+       WHERE na.alert_id = $1
+       ORDER BY na.attempted_at DESC, na.channel ASC
+       LIMIT 200;`,
+      [alertId]
+    );
+
+    const counts = {
+      total: result.rowCount,
+      sent: 0,
+      failed: 0,
+      skipped: 0,
+      by_channel: {
+        email: { sent: 0, failed: 0, skipped: 0 },
+        sms: { sent: 0, failed: 0, skipped: 0 },
+      },
+    };
+
+    for (const row of result.rows) {
+      if (counts[row.status] !== undefined) counts[row.status] += 1;
+      const channelCounts = counts.by_channel[row.channel];
+      if (channelCounts && channelCounts[row.status] !== undefined) {
+        channelCounts[row.status] += 1;
+      }
+    }
+
+    return res.status(200).json({
+      status: 'ok',
+      data: {
+        alert_id: ownership.rows[0].id,
+        alert_status: ownership.rows[0].status,
+        triggered_at: ownership.rows[0].triggered_at,
+        counts,
+        attempts: result.rows.map((row) => ({
+          id: row.id,
+          channel: row.channel,
+          destination: row.destination,
+          status: row.status,
+          provider_message_id: row.provider_message_id,
+          attempt_number: row.attempt_number,
+          error_message: row.error_message,
+          attempted_at: row.attempted_at,
+          delivered_at: row.delivered_at,
+          contact: row.contact_id
+            ? { id: row.contact_id, contact_name: row.contact_name }
+            : null,
+        })),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+/**
  * POST /api/v1/alerts/trigger
  * Silently trigger an emergency SOS alert.
  * Transactional: creates alert record, stores initial coordinates if available, and logs audit event.

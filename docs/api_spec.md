@@ -199,6 +199,8 @@ Returns all trusted emergency contacts for the authenticated user, ordered by pr
         "contact_phone": "+15550199001",
         "contact_email": "alex.rivera@example.local",
         "priority_order": 1,
+        "notify_email": true,
+        "notify_sms": true,
         "created_at": "2026-08-29T12:00:00.000Z",
         "updated_at": "2026-08-29T12:00:00.000Z"
       }
@@ -221,9 +223,12 @@ Creates a new trusted contact with automatic priority ordering and collision res
   "contact_name": "Jordan Taylor",
   "contact_phone": "+15550199002",
   "contact_email": "jordan.taylor@example.local",
-  "priority_order": 2
+  "priority_order": 2,
+  "notify_email": true,
+  "notify_sms": false
 }
 ```
+`notify_email` and `notify_sms` are optional booleans that default to `true`. A channel is skipped at dispatch time when the preference is false or the matching destination is missing.
 - **Success Response (`201 Created`):**
 ```json
 {
@@ -237,6 +242,8 @@ Creates a new trusted contact with automatic priority ordering and collision res
       "contact_phone": "+15550199002",
       "contact_email": "jordan.taylor@example.local",
       "priority_order": 2,
+      "notify_email": true,
+      "notify_sms": false,
       "created_at": "2026-08-29T12:10:00.000Z",
       "updated_at": "2026-08-29T12:10:00.000Z"
     }
@@ -263,6 +270,8 @@ Retrieves a specific contact by UUID with strict ownership verification.
       "contact_phone": "+15550199001",
       "contact_email": "alex.rivera@example.local",
       "priority_order": 1,
+      "notify_email": true,
+      "notify_sms": true,
       "created_at": "2026-08-29T12:00:00.000Z",
       "updated_at": "2026-08-29T12:00:00.000Z"
     }
@@ -284,7 +293,8 @@ Updates contact details or shifts priority position transactionally.
 {
   "contact_name": "Alex Rivera (Updated)",
   "contact_phone": "+15550199999",
-  "priority_order": 1
+  "priority_order": 1,
+  "notify_email": false
 }
 ```
 - **Success Response (`200 OK`):**
@@ -300,6 +310,8 @@ Updates contact details or shifts priority position transactionally.
       "contact_phone": "+15550199999",
       "contact_email": "alex.rivera@example.local",
       "priority_order": 1,
+      "notify_email": false,
+      "notify_sms": true,
       "created_at": "2026-08-29T12:00:00.000Z",
       "updated_at": "2026-08-29T12:15:00.000Z"
     }
@@ -617,6 +629,53 @@ Public endpoint accessed by trusted emergency recipients holding an unguessable 
 
 ---
 
+### 16. Get Delivery Receipts
+Returns per-attempt notification receipts for one alert owned by the authenticated user.
+
+- **Route:** `GET /api/v1/alerts/:id/notifications`
+- **Authentication:** `Bearer <token>` (Required)
+- **Success Response (`200 OK`):**
+```json
+{
+  "status": "ok",
+  "data": {
+    "alert_id": "a000d49d-9f30-4019-a358-b4cff4fe4611",
+    "alert_status": "active",
+    "triggered_at": "2026-10-27T07:00:00.000Z",
+    "counts": {
+      "total": 2,
+      "sent": 1,
+      "failed": 1,
+      "skipped": 0,
+      "by_channel": {
+        "email": { "sent": 1, "failed": 0, "skipped": 0 },
+        "sms": { "sent": 0, "failed": 1, "skipped": 0 }
+      }
+    },
+    "attempts": [
+      {
+        "id": "d4c1...",
+        "channel": "sms",
+        "destination": "+15***9001",
+        "status": "failed",
+        "provider_message_id": null,
+        "attempt_number": 1,
+        "error_message": "carrier rejected",
+        "attempted_at": "2026-10-27T07:00:02.000Z",
+        "delivered_at": null,
+        "contact": { "id": "c000...", "contact_name": "Alex Rivera" }
+      }
+    ]
+  }
+}
+```
+- Destinations are masked at write time; raw emails and phone numbers are never returned.
+- **`400 Bad Request`**: malformed alert UUID.
+- **`404 Not Found`**: alert does not exist or belongs to another user.
+- **`401 Unauthorized`**: missing or invalid JWT.
+
+---
+
 ## 3. Real-Time Location Gateway (`Socket.IO`) — Step 5B (Implemented)
 
 The Silent SOS real-time gateway enables bidirectional coordinate telemetry and status streaming to authorized emergency recipients via WebSocket/polling (`/socket.io`).
@@ -768,10 +827,11 @@ Removes a subscription.
 
 ## 5. Planned Routes for Future Milestones
 
-### Notification Channels & Stealth Mode — *Phase C+ / Step 6*
-- SMS delivery channel via Twilio
-- Recipient notification preferences and delivery receipts UI
-- Interactive Leaflet map recipient tracking portal with live GPS breadcrumb rendering *(Step 5C — completed)*
-- pg-boss asynchronous worker pipeline over PostgreSQL *(Step 5C — completed)*
-- Email and Web Push notification channels *(Phase C — completed)*
+### Stealth Mode & Hardening — *Step 6 / Phase E*
 - Stealth mode decoy calculator/notes UI and panic hotkeys
+- Production hardening: request body limits, stricter public-endpoint rate limiting, and security regression tests
+- SMS delivery channel via Twilio *(completed)*
+- Recipient notification preferences and delivery receipts UI *(completed)*
+- Interactive Leaflet recipient tracking portal with live GPS breadcrumb rendering *(completed)*
+- pg-boss asynchronous worker pipeline over PostgreSQL *(completed)*
+- Email and Web Push notification channels *(completed)*

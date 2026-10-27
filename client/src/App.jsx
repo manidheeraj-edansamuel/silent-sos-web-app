@@ -25,6 +25,8 @@ export default function App() {
     contact_phone: '',
     contact_email: '',
     priority_order: '',
+    notify_email: true,
+    notify_sms: true,
   });
   const [contactFormError, setContactFormError] = useState('');
   const [contactFormLoading, setContactFormLoading] = useState(false);
@@ -39,6 +41,11 @@ export default function App() {
   const [resolveReason, setResolveReason] = useState('Safe Arrival / Threat Passed');
   const [resolveLoading, setResolveLoading] = useState(false);
   const watchIdRef = useRef(null);
+
+  // Phase C: Delivery receipts for the active alert
+  const [deliveryReceipts, setDeliveryReceipts] = useState(null);
+  const [receiptsLoading, setReceiptsLoading] = useState(false);
+  const [receiptsError, setReceiptsError] = useState('');
 
   // Global Alert / Feedback State
   const [alertFeedback, setAlertFeedback] = useState(null);
@@ -165,6 +172,49 @@ export default function App() {
       console.error('[Active alert fetch error]:', err);
     }
   }, []);
+
+  // 5. Fetch Delivery Receipts for the Active Alert (/api/v1/alerts/:id/notifications)
+  const fetchDeliveryReceipts = useCallback(async (activeToken, alertId, quiet = false) => {
+    if (!activeToken || !alertId) {
+      setDeliveryReceipts(null);
+      return;
+    }
+    if (!quiet) setReceiptsLoading(true);
+    try {
+      const res = await fetch(`/api/v1/alerts/${alertId}/notifications`, {
+        headers: {
+          Authorization: `Bearer ${activeToken}`,
+          Accept: 'application/json',
+        },
+      });
+      const data = await res.json();
+      if (res.ok && data.data) {
+        setDeliveryReceipts(data.data);
+        setReceiptsError('');
+      } else {
+        setReceiptsError(data.message || 'Unable to load delivery receipts.');
+      }
+    } catch (err) {
+      setReceiptsError('Network error while loading delivery receipts.');
+    } finally {
+      if (!quiet) setReceiptsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!activeAlert?.id || activeAlert.status !== 'active' || !token) {
+      setDeliveryReceipts(null);
+      setReceiptsError('');
+      return;
+    }
+
+    fetchDeliveryReceipts(token, activeAlert.id);
+    const interval = setInterval(() => {
+      fetchDeliveryReceipts(token, activeAlert.id, true);
+    }, 15000);
+
+    return () => clearInterval(interval);
+  }, [activeAlert?.id, activeAlert?.status, token, fetchDeliveryReceipts]);
 
   useEffect(() => {
     checkHealth();
@@ -445,6 +495,8 @@ export default function App() {
       contact_phone: '',
       contact_email: '',
       priority_order: String(contacts.length + 1),
+      notify_email: true,
+      notify_sms: true,
     });
     setContactFormError('');
     setContactModalOpen(true);
@@ -457,6 +509,8 @@ export default function App() {
       contact_phone: contact.contact_phone || '',
       contact_email: contact.contact_email || '',
       priority_order: String(contact.priority_order),
+      notify_email: contact.notify_email !== false,
+      notify_sms: contact.notify_sms !== false,
     });
     setContactFormError('');
     setContactModalOpen(true);
@@ -477,6 +531,8 @@ export default function App() {
         contact_phone: contactForm.contact_phone.trim() || null,
         contact_email: contactForm.contact_email.trim() || null,
         priority_order: contactForm.priority_order ? parseInt(contactForm.priority_order, 10) : undefined,
+        notify_email: contactForm.notify_email,
+        notify_sms: contactForm.notify_sms,
       };
 
       const res = await fetch(endpoint, {
@@ -900,6 +956,121 @@ export default function App() {
             </section>
           )}
 
+          {/* Phase C: Notification Delivery Receipts */}
+          {activeAlert && activeAlert.status === 'active' && (
+            <section className="card delivery-receipts-card">
+              <div className="card-header">
+                <div>
+                  <div className="card-title">
+                    <svg
+                      width="20"
+                      height="20"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+                    </svg>
+                    <span>Notification Delivery Receipts</span>
+                  </div>
+                  <p style={{ fontSize: '0.82rem', color: 'var(--text-secondary)', marginTop: '0.2rem' }}>
+                    Per-channel delivery status for the contacts alerted by this emergency.
+                  </p>
+                </div>
+
+                <button
+                  className="btn btn-outline btn-sm"
+                  onClick={() => fetchDeliveryReceipts(token, activeAlert.id)}
+                  disabled={receiptsLoading}
+                >
+                  {receiptsLoading ? 'Refreshing...' : 'Refresh Receipts'}
+                </button>
+              </div>
+
+              {receiptsError && (
+                <div className="alert alert-error">
+                  <span>✗</span>
+                  <span>{receiptsError}</span>
+                </div>
+              )}
+
+              {!deliveryReceipts && receiptsLoading && (
+                <div className="receipts-empty">Loading delivery attempts...</div>
+              )}
+
+              {deliveryReceipts && (
+                <>
+                  <div className="receipt-summary">
+                    <span className="receipt-summary-item delivered">
+                      <strong>{deliveryReceipts.counts.sent}</strong> delivered
+                    </span>
+                    <span className="receipt-summary-item failed">
+                      <strong>{deliveryReceipts.counts.failed}</strong> failed
+                    </span>
+                    <span className="receipt-summary-item skipped">
+                      <strong>{deliveryReceipts.counts.skipped}</strong> skipped
+                    </span>
+                    <span className="receipt-summary-item">
+                      Email {deliveryReceipts.counts.by_channel.email.sent}/
+                      {deliveryReceipts.counts.by_channel.email.sent +
+                        deliveryReceipts.counts.by_channel.email.failed}
+                    </span>
+                    <span className="receipt-summary-item">
+                      SMS {deliveryReceipts.counts.by_channel.sms.sent}/
+                      {deliveryReceipts.counts.by_channel.sms.sent +
+                        deliveryReceipts.counts.by_channel.sms.failed}
+                    </span>
+                  </div>
+
+                  {deliveryReceipts.attempts.length === 0 ? (
+                    <div className="receipts-empty">
+                      No delivery attempts recorded yet. The dispatch worker retries automatically.
+                    </div>
+                  ) : (
+                    <div className="receipts-table-wrapper">
+                      <table className="receipts-table">
+                        <thead>
+                          <tr>
+                            <th>Contact</th>
+                            <th>Channel</th>
+                            <th>Destination</th>
+                            <th>Status</th>
+                            <th>Attempted</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {deliveryReceipts.attempts.map((attempt) => (
+                            <tr key={attempt.id}>
+                              <td>{attempt.contact?.contact_name || 'Unknown contact'}</td>
+                              <td>
+                                <span className={`receipt-channel ${attempt.channel}`}>
+                                  {attempt.channel}
+                                </span>
+                              </td>
+                              <td className="receipt-destination">{attempt.destination}</td>
+                              <td>
+                                <span className={`receipt-status ${attempt.status}`}>
+                                  {attempt.status}
+                                </span>
+                                {attempt.error_message && attempt.status !== 'sent' && (
+                                  <span className="receipt-error">{attempt.error_message}</span>
+                                )}
+                              </td>
+                              <td>{new Date(attempt.attempted_at).toLocaleTimeString()}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              )}
+            </section>
+          )}
+
           {/* Authenticated View: Emergency Contacts Management Dashboard */}
           <section className="card">
           <div className="card-header">
@@ -990,6 +1161,15 @@ export default function App() {
                     )}
                   </div>
 
+                  <div className="contact-channel-prefs">
+                    <span className={`channel-tag ${contact.notify_email && contact.contact_email ? 'on' : 'off'}`}>
+                      Email {contact.notify_email && contact.contact_email ? 'on' : 'off'}
+                    </span>
+                    <span className={`channel-tag ${contact.notify_sms && contact.contact_phone ? 'on' : 'off'}`}>
+                      SMS {contact.notify_sms && contact.contact_phone ? 'on' : 'off'}
+                    </span>
+                  </div>
+
                   <div className="contact-actions">
                     <button
                       className="btn btn-outline btn-sm"
@@ -1072,6 +1252,31 @@ export default function App() {
                   value={contactForm.contact_email}
                   onChange={(e) => setContactForm({ ...contactForm, contact_email: e.target.value })}
                 />
+              </div>
+
+              <div className="form-group">
+                <span className="form-label">Notification Channels</span>
+                <div className="channel-prefs">
+                  <label className={`channel-pref ${contactForm.notify_email ? 'enabled' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={contactForm.notify_email}
+                      onChange={(e) => setContactForm({ ...contactForm, notify_email: e.target.checked })}
+                    />
+                    <span>Email alerts</span>
+                  </label>
+                  <label className={`channel-pref ${contactForm.notify_sms ? 'enabled' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={contactForm.notify_sms}
+                      onChange={(e) => setContactForm({ ...contactForm, notify_sms: e.target.checked })}
+                    />
+                    <span>SMS alerts</span>
+                  </label>
+                </div>
+                <span className="form-hint">
+                  Channels without a saved destination are skipped automatically.
+                </span>
               </div>
 
               <div className="form-group">

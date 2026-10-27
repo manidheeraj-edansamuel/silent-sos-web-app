@@ -36,6 +36,7 @@ describe('Database & Geospatial Schema Verification Tests', () => {
       'alert_locations',
       'alert_events',
       'notification_attempts',
+      'push_subscriptions',
       'schema_migrations',
     ];
 
@@ -185,5 +186,55 @@ describe('Database & Geospatial Schema Verification Tests', () => {
 
     assert.ok(alertFk, 'notification_attempts must reference alerts(id)');
     assert.ok(contactFk, 'notification_attempts must reference emergency_contacts(id)');
+  });
+
+  test('11. Emergency contacts expose notification channel preferences', async () => {
+    const columnsRes = await query(`
+      SELECT column_name, data_type, is_nullable, column_default
+      FROM information_schema.columns
+      WHERE table_name = 'emergency_contacts';
+    `);
+    const cols = Object.fromEntries(columnsRes.rows.map((r) => [r.column_name, r]));
+
+    assert.ok(cols.notify_email, 'emergency_contacts must have notify_email');
+    assert.ok(cols.notify_sms, 'emergency_contacts must have notify_sms');
+    assert.equal(cols.notify_email.data_type, 'boolean');
+    assert.equal(cols.notify_sms.data_type, 'boolean');
+    assert.equal(cols.notify_email.is_nullable, 'NO');
+    assert.equal(cols.notify_sms.is_nullable, 'NO');
+  });
+
+  test('12. Push subscriptions are alert-scoped and cascade with alerts', async () => {
+    const columnsRes = await query(`
+      SELECT column_name
+      FROM information_schema.columns
+      WHERE table_name = 'push_subscriptions';
+    `);
+    const cols = columnsRes.rows.map((r) => r.column_name);
+    for (const expected of [
+      'alert_id',
+      'endpoint',
+      'p256dh',
+      'auth',
+      'tracking_token_encrypted',
+      'last_notified_at',
+    ]) {
+      assert.ok(cols.includes(expected), `push_subscriptions must have ${expected}`);
+    }
+
+    const fkRes = await query(`
+      SELECT kcu.column_name, ccu.table_name AS foreign_table_name
+      FROM information_schema.table_constraints AS tc
+      JOIN information_schema.key_column_usage AS kcu
+        ON tc.constraint_name = kcu.constraint_name
+      JOIN information_schema.constraint_column_usage AS ccu
+        ON ccu.constraint_name = tc.constraint_name
+      WHERE tc.constraint_type = 'FOREIGN KEY'
+        AND tc.table_name = 'push_subscriptions';
+    `);
+    const alertFk = fkRes.rows.find(
+      (r) => r.column_name === 'alert_id' && r.foreign_table_name === 'alerts'
+    );
+    assert.ok(alertFk, 'push_subscriptions must reference alerts(id)');
   });
 });

@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { checkDbHealth } from '../config/database.js';
 import { getEmailStatus } from '../services/emailService.js';
+import { getSmsStatus } from '../services/smsService.js';
 import { getQueueStatus } from '../services/queueService.js';
 import { getPushConfig } from '../services/webPushService.js';
 
@@ -16,6 +17,7 @@ router.get('/', async (req, res) => {
   const dbHealth = await checkDbHealth();
   const queueStatus = await getQueueStatus();
   const emailStatus = getEmailStatus();
+  const smsStatus = getSmsStatus();
   const pushStatus = getPushConfig();
   const isHealthy = dbHealth.isHealthy;
 
@@ -31,11 +33,16 @@ router.get('/', async (req, res) => {
       database: isHealthy ? 'ok' : 'unavailable',
       queue: queueStatus.available ? 'ok' : 'unavailable',
       email: emailStatus.transport === 'none' ? 'unavailable' : 'ok',
+      sms: smsStatus.configured ? 'ok' : 'unavailable',
       push: pushStatus.enabled ? 'ok' : 'unavailable',
     },
     email: {
       transport: emailStatus.transport,
       smtp_configured: emailStatus.configured,
+    },
+    sms: {
+      transport: smsStatus.transport,
+      twilio_configured: smsStatus.configured,
     },
     push: {
       enabled: pushStatus.enabled,

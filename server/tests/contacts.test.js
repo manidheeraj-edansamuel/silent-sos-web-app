@@ -82,19 +82,24 @@ describe('Emergency Contacts API Tests (/api/v1/contacts)', () => {
     assert.equal(res1.body.data.contact.contact_name, 'Dr. Sarah Connor');
     assert.equal(res1.body.data.contact.priority_order, 1);
     assert.equal(res1.body.data.contact.user_id, userAId);
+    assert.equal(res1.body.data.contact.notify_email, true);
+    assert.equal(res1.body.data.contact.notify_sms, true);
     contactA1Id = res1.body.data.contact.id;
 
-    // Add second contact (auto-calculated priority)
+    // Add second contact (auto-calculated priority, email opted out)
     const res2 = await request(app)
       .post('/api/v1/contacts')
       .set('Authorization', `Bearer ${userAToken}`)
       .send({
         contact_name: 'John Connor',
         contact_phone: '+15557654321',
+        notify_email: false,
       })
       .expect(201);
 
     assert.equal(res2.body.data.contact.priority_order, 2);
+    assert.equal(res2.body.data.contact.notify_email, false);
+    assert.equal(res2.body.data.contact.notify_sms, true);
     contactA2Id = res2.body.data.contact.id;
   });
 
@@ -123,6 +128,13 @@ describe('Emergency Contacts API Tests (/api/v1/contacts)', () => {
       .post('/api/v1/contacts')
       .set('Authorization', `Bearer ${userAToken}`)
       .send({ contact_name: 'Test', contact_phone: '+15551234567', priority_order: 0 })
+      .expect(400);
+
+    // Notification preferences must be booleans
+    await request(app)
+      .post('/api/v1/contacts')
+      .set('Authorization', `Bearer ${userAToken}`)
+      .send({ contact_name: 'Test', contact_phone: '+15551234567', notify_email: 'yes' })
       .expect(400);
   });
 
@@ -189,12 +201,15 @@ describe('Emergency Contacts API Tests (/api/v1/contacts)', () => {
       .send({
         contact_name: 'Dr. Sarah Connor (Updated)',
         contact_phone: '+15559998888',
+        notify_email: false,
       })
       .expect(200);
 
     assert.equal(res.body.status, 'ok');
     assert.equal(res.body.data.contact.contact_name, 'Dr. Sarah Connor (Updated)');
     assert.equal(res.body.data.contact.contact_phone, '+15559998888');
+    assert.equal(res.body.data.contact.notify_email, false);
+    assert.equal(res.body.data.contact.notify_sms, true);
   });
 
   test('7. DELETE /api/v1/contacts/:id - Deletes contact and recompactions priority for User A', async (t) => {

@@ -71,6 +71,7 @@ The **Silent SOS Emergency Web App** provides a covert, fast, and reliable mecha
 - **Step 5C (Completed):** Interactive Leaflet map recipient tracking portal (`/?track=<token>`) with live breadcrumbs, accuracy circles, and resolution handling. pg-boss asynchronous dispatch queue (`alert.dispatch`) backed by PostgreSQL with post-commit enqueueing, retry with exponential backoff, `notification_dispatched` audit events, and queue depth reporting in the health endpoint. Production client build served by Express for single-service deployment.
 - **Phase C — Email (Completed):** The dispatch worker emails every emergency contact that has an address on file, embedding a private `/?track=<token>` live-tracking link. Nodemailer uses SMTP when `SMTP_HOST` is configured and a JSON transport otherwise, so development and tests never require a mail server. Raw tracking tokens ride only in the pg-boss job payload (deleted after one hour) and are never logged; audit events record delivery counts and contact IDs, never addresses. Emails are skipped for alerts that are no longer active, and a dispatch retries only when every attempted send failed to avoid duplicate emergency emails. Request logging redacts tokens from both `/alerts/track/:token` paths and `?track=` query strings.
 - **Phase C — Web Push (Completed):** Recipients on the tracking portal can opt into browser push for one specific alert via `POST /api/v1/alerts/track/:token/push-subscriptions` (migration 010, `push_subscriptions`). The portal registers `sw.js`, subscribes through `PushManager` with the VAPID public key from `GET /api/v1/alerts/push/config`, and receives `location_update` and `resolved` notifications. Delivery is throttled per subscription (`last_notified_at`, `PUSH_LOCATION_INTERVAL_SECONDS` default 120) to prevent notification spam. Click-through URLs are rebuilt from per-subscription AES-256-GCM encrypted tracking tokens, so plaintext tokens are never stored; endpoints returning 403/404/410 are deleted, and resolution removes all subscriptions for the alert. Push endpoints, keys, and tokens are never logged or written to audit records, and `push_dispatched` audit events store only counts and event names.
+- **Phase C — SMS, Preferences & Receipts (Completed):** Migration 011 adds `notify_email` / `notify_sms` to `emergency_contacts`, and the dispatch worker enforces both the preference and the presence of a destination before sending. SMS delivery uses Twilio's REST API only when `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, and `TWILIO_FROM_NUMBER` are configured; phone numbers are normalized to E.164 and invalid values are skipped rather than sent. Every email/SMS attempt is written to `notification_attempts` with a masked destination (`a***@domain`, `+15***9001`) and a scrubbed error message. The authenticated alert owner can read receipts at `GET /api/v1/alerts/:id/notifications`, which is tenant-isolated and currently rendered as a live receipts card in the dashboard. A dispatch retries only when at least one send was attempted and no channel reached any recipient.
 
 ### Phase 6: PWA, Offline Capabilities & Stealth Mode (Future Milestone)
 - Service worker precaching, offline capability, installability (a minimal push-only service worker already ships)
@@ -109,6 +110,8 @@ erDiagram
         varchar contact_phone
         varchar contact_email
         integer priority_order
+        boolean notify_email
+        boolean notify_sms
         timestamptz created_at
         timestamptz updated_at
     }
@@ -184,6 +187,6 @@ erDiagram
 | **Realtime** | Socket.IO | Bidirectional event transport for live coordinate streaming |
 | **Database** | PostgreSQL 18.6 + PostGIS 3.6.2 | ACID transactional integrity with native geographic coordinates & GiST spatial indexing |
 | **Queue** | pg-boss (PostgreSQL) | Durable background notification dispatch without Redis; jobs survive restarts and retry with backoff |
-| **Notifications** | Nodemailer, Web Push (VAPID) | SMTP email delivery plus browser push notifications; JSON transport fallback in development and ephemeral VAPID keys when unset |
+| **Notifications** | Nodemailer, Twilio, Web Push (VAPID) | SMTP email, E.164-normalized SMS, and browser push; JSON transport fallback in development, SMS skipped without credentials, ephemeral VAPID keys when unset |
 | **Mapping** | Leaflet | Lightweight, privacy-respecting client mapping |
-| **Security** | Helmet, CORS, JWT, AES-256-GCM | Layered perimeter and session security; push click-through tokens encrypted at rest |
+| **Security** | Helmet, CORS, JWT, AES-256-GCM | Layered perimeter and session security; push click-through tokens encrypted at rest and delivery destinations masked in receipts |

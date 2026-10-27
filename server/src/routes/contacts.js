@@ -19,7 +19,10 @@ router.use(authenticateToken);
 /**
  * Validates emergency contact payload
  */
-function validateContactInput({ contact_name, contact_phone, contact_email, priority_order }, isUpdate = false) {
+function validateContactInput(
+  { contact_name, contact_phone, contact_email, priority_order, notify_email, notify_sms },
+  isUpdate = false
+) {
   const errors = [];
 
   if (!isUpdate || contact_name !== undefined) {
@@ -49,6 +52,14 @@ function validateContactInput({ contact_name, contact_phone, contact_email, prio
     }
   }
 
+  if (notify_email !== undefined && typeof notify_email !== 'boolean') {
+    errors.push('notify_email must be a boolean.');
+  }
+
+  if (notify_sms !== undefined && typeof notify_sms !== 'boolean') {
+    errors.push('notify_sms must be a boolean.');
+  }
+
   return errors;
 }
 
@@ -61,7 +72,8 @@ router.get('/', async (req, res, next) => {
     const userId = req.user.id;
 
     const result = await query(
-      `SELECT id, user_id, contact_name, contact_phone, contact_email, priority_order, created_at, updated_at
+      `SELECT id, user_id, contact_name, contact_phone, contact_email, priority_order,
+              notify_email, notify_sms, created_at, updated_at
        FROM emergency_contacts
        WHERE user_id = $1
        ORDER BY priority_order ASC;`,
@@ -88,9 +100,17 @@ router.post('/', async (req, res, next) => {
   const client = await getClient();
   try {
     const userId = req.user.id;
-    const { contact_name, contact_phone, contact_email, priority_order } = req.body;
+    const { contact_name, contact_phone, contact_email, priority_order, notify_email, notify_sms } =
+      req.body;
 
-    const validationErrors = validateContactInput({ contact_name, contact_phone, contact_email, priority_order });
+    const validationErrors = validateContactInput({
+      contact_name,
+      contact_phone,
+      contact_email,
+      priority_order,
+      notify_email,
+      notify_sms,
+    });
     if (validationErrors.length > 0) {
       return res.status(400).json({
         status: 'error',
@@ -102,6 +122,8 @@ router.post('/', async (req, res, next) => {
     const cleanName = contact_name.trim();
     const cleanPhone = contact_phone ? String(contact_phone).trim() : null;
     const cleanEmail = contact_email ? String(contact_email).trim().toLowerCase() : null;
+    const wantsEmail = notify_email !== undefined ? notify_email : true;
+    const wantsSms = notify_sms !== undefined ? notify_sms : true;
 
     await client.query('BEGIN');
 
@@ -134,10 +156,14 @@ router.post('/', async (req, res, next) => {
 
     // Insert new contact
     const insertRes = await client.query(
-      `INSERT INTO emergency_contacts (user_id, contact_name, contact_phone, contact_email, priority_order, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
-       RETURNING id, user_id, contact_name, contact_phone, contact_email, priority_order, created_at, updated_at;`,
-      [userId, cleanName, cleanPhone, cleanEmail, targetPriority]
+      `INSERT INTO emergency_contacts (
+         user_id, contact_name, contact_phone, contact_email, priority_order,
+         notify_email, notify_sms, created_at, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
+       RETURNING id, user_id, contact_name, contact_phone, contact_email, priority_order,
+                 notify_email, notify_sms, created_at, updated_at;`,
+      [userId, cleanName, cleanPhone, cleanEmail, targetPriority, wantsEmail, wantsSms]
     );
 
     await client.query('COMMIT');
@@ -167,7 +193,8 @@ router.get('/:id', async (req, res, next) => {
     const contactId = req.params.id;
 
     const result = await query(
-      `SELECT id, user_id, contact_name, contact_phone, contact_email, priority_order, created_at, updated_at
+      `SELECT id, user_id, contact_name, contact_phone, contact_email, priority_order,
+              notify_email, notify_sms, created_at, updated_at
        FROM emergency_contacts
        WHERE id = $1 AND user_id = $2;`,
       [contactId, userId]
@@ -200,10 +227,11 @@ router.put('/:id', async (req, res, next) => {
   try {
     const userId = req.user.id;
     const contactId = req.params.id;
-    const { contact_name, contact_phone, contact_email, priority_order } = req.body;
+    const { contact_name, contact_phone, contact_email, priority_order, notify_email, notify_sms } =
+      req.body;
 
     const validationErrors = validateContactInput(
-      { contact_name, contact_phone, contact_email, priority_order },
+      { contact_name, contact_phone, contact_email, priority_order, notify_email, notify_sms },
       true
     );
 
@@ -219,7 +247,8 @@ router.put('/:id', async (req, res, next) => {
 
     // Verify contact exists and belongs to current user
     const checkRes = await client.query(
-      `SELECT id, user_id, contact_name, contact_phone, contact_email, priority_order
+      `SELECT id, user_id, contact_name, contact_phone, contact_email, priority_order,
+              notify_email, notify_sms
        FROM emergency_contacts
        WHERE id = $1 AND user_id = $2;`,
       [contactId, userId]
@@ -237,6 +266,8 @@ router.put('/:id', async (req, res, next) => {
     const newName = contact_name !== undefined ? contact_name.trim() : currentContact.contact_name;
     const newPhone = contact_phone !== undefined ? (contact_phone ? String(contact_phone).trim() : null) : currentContact.contact_phone;
     const newEmail = contact_email !== undefined ? (contact_email ? String(contact_email).trim().toLowerCase() : null) : currentContact.contact_email;
+    const newNotifyEmail = notify_email !== undefined ? notify_email : currentContact.notify_email;
+    const newNotifySms = notify_sms !== undefined ? notify_sms : currentContact.notify_sms;
 
     // Check communication method constraint
     if (!newPhone && !newEmail) {
@@ -289,10 +320,13 @@ router.put('/:id', async (req, res, next) => {
            contact_phone = $2,
            contact_email = $3,
            priority_order = $4,
+           notify_email = $5,
+           notify_sms = $6,
            updated_at = NOW()
-       WHERE id = $5 AND user_id = $6
-       RETURNING id, user_id, contact_name, contact_phone, contact_email, priority_order, created_at, updated_at;`,
-      [newName, newPhone, newEmail, newPriority, contactId, userId]
+       WHERE id = $7 AND user_id = $8
+       RETURNING id, user_id, contact_name, contact_phone, contact_email, priority_order,
+                 notify_email, notify_sms, created_at, updated_at;`,
+      [newName, newPhone, newEmail, newPriority, newNotifyEmail, newNotifySms, contactId, userId]
     );
 
     await client.query('COMMIT');
