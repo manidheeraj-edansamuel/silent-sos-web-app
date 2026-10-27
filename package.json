@@ -13,10 +13,12 @@
     "dev:client": "npm --prefix client run dev",
     "build": "npm --prefix client run build",
     "start": "npm --prefix server start",
+    "start:neon": "node --env-file=.env.local server/src/server.js",
     "test": "npm --prefix server test",
     "test:server": "npm --prefix server test",
     "db:init": "node database/scripts/init-db.js",
     "db:migrate": "node database/scripts/migrate.js",
+    "db:migrate:neon": "node --env-file=.env.local database/scripts/migrate.js",
     "db:seed": "node database/scripts/seed.js",
     "install:all": "npm install && npm --prefix server install && npm --prefix client install"
   },
