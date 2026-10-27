@@ -20,7 +20,7 @@
     "db:migrate": "node database/scripts/migrate.js",
     "db:migrate:neon": "node --env-file=.env.local database/scripts/migrate.js",
     "db:seed": "node database/scripts/seed.js",
-    "install:all": "npm install && npm --prefix server install && npm --prefix client install"
+    "install:all": "npm install --include=dev && npm --prefix server install --include=dev && npm --prefix client install --include=dev"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

@@ -24,6 +24,10 @@ services:
         value: "22"
       - key: NODE_ENV
         value: production
+      # NODE_ENV=production is visible during the build, which makes npm skip
+      # devDependencies (Vite). Keep dev dependencies installed for the build.
+      - key: NPM_CONFIG_INCLUDE
+        value: dev
       # One managed reverse proxy hop in front of the app.
       - key: TRUST_PROXY
         value: "1"
