@@ -82,7 +82,14 @@ The **Silent SOS Emergency Web App** provides a covert, fast, and reliable mecha
 - Trigger origin recorded in the `triggered` audit event (`stealth_pin` or `panic_hotkey`); location fallback, dispatch, and receipts are unchanged
 - Discreet exit by holding the decoy header for 2 seconds or pressing `Ctrl`+`Shift`+`E`
 
-### Phase 7: PWA & Offline Capabilities (Future Milestone)
+### Phase 7: Production Hardening (Completed)
+- JSON and URL-encoded bodies capped at 64 KB, with `413` JSON responses for oversized payloads
+- `X-Powered-By` removed; Helmet continues to set CSP, nosniff, frame, and referrer protections
+- `Cache-Control: no-store` applied to every `/api` response so session, location, and receipt data is never cached
+- Public `GET /api/v1/alerts/push/config` rate-limited with `pushConfigRateLimiter` (60 requests / 15 minutes / IP)
+- Hardening regression suite covers headers, payload limits, malformed JSON, non-leaking 404s, and VAPID public-key-only exposure
+
+### Phase 8: PWA & Offline Capabilities (Future Milestone)
 - Service worker precaching, offline capability, installability (a minimal push-only service worker already ships)
 - Offline emergency alert queuing with IndexedDB synchronization
 
@@ -197,4 +204,4 @@ erDiagram
 | **Queue** | pg-boss (PostgreSQL) | Durable background notification dispatch without Redis; jobs survive restarts and retry with backoff |
 | **Notifications** | Nodemailer, Twilio, Web Push (VAPID) | SMTP email, E.164-normalized SMS, and browser push; JSON transport fallback in development, SMS skipped without credentials, ephemeral VAPID keys when unset |
 | **Mapping** | Leaflet | Lightweight, privacy-respecting client mapping |
-| **Security** | Helmet, CORS, JWT, AES-256-GCM, SHA-256 | Layered perimeter and session security; push click-through tokens encrypted at rest, delivery destinations masked in receipts, and the stealth PIN stored only as a local SHA-256 hash |
+| **Security** | Helmet, CORS, JWT, AES-256-GCM, SHA-256 | Layered perimeter and session security; push click-through tokens encrypted at rest, delivery destinations masked in receipts, the stealth PIN stored only as a local SHA-256 hash, and API bodies capped at 64 KB with `no-store` responses |

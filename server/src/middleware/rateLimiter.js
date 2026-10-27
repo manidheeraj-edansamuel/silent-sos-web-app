@@ -58,8 +58,28 @@ export const trackingRateLimiter = rateLimit({
   },
 });
 
+/**
+ * Rate limiter for the public push configuration endpoint.
+ * The endpoint is unauthenticated, so throttle it even though it exposes
+ * only the public VAPID key.
+ */
+export const pushConfigRateLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 60,                  // 60 requests per 15 minutes per IP
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: () => process.env.NODE_ENV === 'test',
+  handler: (req, res) => {
+    res.status(429).json({
+      status: 'error',
+      message: 'Too many push configuration requests. Please try again after 15 minutes.',
+    });
+  },
+});
+
 export default {
   authRateLimiter,
   loginRateLimiter,
   trackingRateLimiter,
+  pushConfigRateLimiter,
 };

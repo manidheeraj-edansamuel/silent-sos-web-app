@@ -20,6 +20,9 @@ const clientDistPath = path.resolve(__dirname, '../../client/dist');
 
 const app = express();
 
+// Do not advertise the server framework in responses.
+app.disable('x-powered-by');
+
 // Security middleware - Helmet
 // CSP relaxed for Leaflet OpenStreetMap tiles and same-origin Socket.IO WebSockets
 app.use(
@@ -74,8 +77,15 @@ app.use(
 );
 
 // Request body parsing
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// Emergency payloads are small; cap them to reduce memory-exhaustion risk.
+app.use(express.json({ limit: '64kb' }));
+app.use(express.urlencoded({ extended: true, limit: '64kb' }));
+
+// API responses contain session, location, and receipt data, so never cache them.
+app.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
 
 // HTTP Request logging
 // Tracking tokens grant access to live location data, so they are redacted

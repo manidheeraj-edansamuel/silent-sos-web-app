@@ -10,7 +10,7 @@ import { Router } from 'express';
 import crypto from 'crypto';
 import { getClient, query } from '../config/database.js';
 import { authenticateToken } from '../middleware/auth.js';
-import { trackingRateLimiter } from '../middleware/rateLimiter.js';
+import { trackingRateLimiter, pushConfigRateLimiter } from '../middleware/rateLimiter.js';
 import { emitLocationUpdate, emitStatusUpdate } from '../services/socketService.js';
 import { enqueueAlertDispatch } from '../services/queueService.js';
 import {
@@ -233,7 +233,7 @@ function validatePushSubscription(body) {
  * Public Web Push configuration for the recipient portal.
  * Exposes only the VAPID public key; private keys stay server-side.
  */
-router.get('/push/config', (req, res) => {
+router.get('/push/config', pushConfigRateLimiter, (req, res) => {
   return res.status(200).json({
     status: 'ok',
     data: getPushConfig(),

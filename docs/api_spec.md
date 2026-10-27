@@ -36,6 +36,13 @@ To respect privacy and prevent identity leakage, JWT access tokens contain **ONL
 - Contact endpoints derive identity solely from `req.user.id` (extracted from the validated JWT token).
 - Accessing or modifying another user's contact ID returns `404 Not Found` to prevent data enumeration.
 
+### F. Transport & Request Hardening
+- JSON and URL-encoded request bodies are limited to **64 KB**; larger payloads return `413` with `{ "status": "error" }`.
+- `X-Powered-By` is disabled; Helmet sets CSP, `X-Content-Type-Options: nosniff`, frame, and referrer protections.
+- All `/api` responses carry `Cache-Control: no-store`.
+- Malformed JSON returns `400` and unknown API routes return `404`, both as JSON without stack traces outside development.
+- Public endpoints are rate-limited: recipient tracking and push subscription routes at 60 requests / 15 minutes / IP (`trackingRateLimiter`), and push configuration at 60 requests / 15 minutes / IP (`pushConfigRateLimiter`).
+
 ---
 
 ## 2. Implemented Endpoints
@@ -827,8 +834,8 @@ Removes a subscription.
 
 ## 5. Planned Routes for Future Milestones
 
-### Hardening — *Phase E*
-- Production hardening: request body limits, stricter public-endpoint rate limiting, and security regression tests
+### Hardening — *Phase E (Completed)*
+- 64 KB request body limits, `no-store` API responses, removed framework fingerprinting, rate-limited push configuration, and security regression tests
 
 ### Client-Only Features (No API Surface)
 - Stealth mode decoy calculator/notes UI, SHA-256 PIN trigger, and panic hotkeys are implemented entirely in the browser; the only API call is the existing `POST /api/v1/alerts/trigger`, which receives `trigger_source: "stealth_pin"` or `"panic_hotkey"` *(completed)*

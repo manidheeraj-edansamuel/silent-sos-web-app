@@ -17,15 +17,15 @@ This is an emergency-oriented web application and is engineered with strict safe
 
 ## 🏗️ Incremental Development Status
 
-> **Current Phase: Phase D / Step 6 — Stealth Mode (Completed)**
+> **Current Phase: Phase E — Production Hardening (Completed)**
 >
-> The app can now be disguised as a neutral calculator and notes utility. The decoy opens full-screen, performs normal calculations, and stores quick notes locally. A user-defined 4–8 digit PIN is hashed with SHA-256 in the browser (only the hash and length are stored in `localStorage`); typing the PIN and pressing `=` silently triggers the SOS flow without changing the decoy display.
+> The API now rejects JSON and URL-encoded payloads above 64 KB, no longer advertises Express via `X-Powered-By`, and marks every `/api` response `Cache-Control: no-store`. The public push-configuration endpoint is rate-limited (60 requests per 15 minutes per IP) and still returns only the VAPID public key. A new hardening suite verifies security headers, payload limits, malformed-JSON handling, non-leaking 404s, and push-config privacy. The suite covers 110 tests across 15 suites.
 >
-> `Ctrl`+`Shift`+`X` works from anywhere in the authenticated app: it opens the decoy and triggers SOS in the same action. Both stealth triggers record their origin (`stealth_pin`, `panic_hotkey`) in the `triggered` audit event, and the existing location fallback, queue dispatch, and recipient notifications apply unchanged. The decoy exits by holding its header for two seconds or pressing `Ctrl`+`Shift`+`E`.
+> Stealth mode (Step 6) remains available: the dashboard can be disguised as a calculator and notes utility. A user-defined 4–8 digit PIN is hashed with SHA-256 in the browser, typing it and pressing `=` silently triggers SOS, and `Ctrl`+`Shift`+`X` triggers from anywhere. Both paths record `stealth_pin` or `panic_hotkey` as the trigger source, and the decoy exits via a two-second header hold or `Ctrl`+`Shift`+`E`.
 >
-> Phase C remains intact: email, SMS, and web push dispatch through the `alert.dispatch` pg-boss worker, per-contact channel preferences are enforced, delivery attempts are recorded with masked destinations, and the alert owner can follow live receipts in the dashboard. The suite covers 104 tests across 14 suites; stealth mode was additionally verified end-to-end in the browser.
+> Phase C remains intact: email, SMS, and web push dispatch through the `alert.dispatch` pg-boss worker, per-contact channel preferences are enforced, delivery attempts are recorded with masked destinations, and the alert owner can follow live receipts in the dashboard.
 
-### Completed in Steps 1–6
+### Completed in Steps 1–6 and Phase E
 - [x] Multi-package workspace directory structure (`client/`, `server/`, `database/`, `docs/`)
 - [x] React + Vite frontend with responsive layout and real-time backend health connectivity display
 - [x] Node.js + Express backend skeleton with security headers (`helmet`), CORS configuration, and `/api/v1/health` endpoint
@@ -79,11 +79,14 @@ This is an emergency-oriented web application and is engineered with strict safe
 - [x] SHA-256 stealth PIN stored in browser storage only (no plaintext PIN, no server transmission)
 - [x] PIN + `=` silent SOS trigger and `Ctrl`+`Shift`+`X` global panic hotkey with audit-safe trigger sources
 - [x] Discreet decoy exit (2-second header hold or `Ctrl`+`Shift`+`E`) and PIN management card
-- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, Socket.IO, Dispatch Queue, Email, Web Push, SMS, and Delivery Receipts (104 passing tests)
+- [x] 64 KB JSON/urlencoded request body limits and removal of the `X-Powered-By` header
+- [x] `Cache-Control: no-store` on all `/api` responses and a rate-limited public push-config endpoint
+- [x] Hardening regression tests for security headers, oversized payloads, malformed JSON, 404 privacy, and push-config exposure
+- [x] Automated test suites covering Health, Database, Security, Auth, Contacts, Alerts, Socket.IO, Dispatch Queue, Email, Web Push, SMS, Delivery Receipts, and Hardening (110 passing tests)
 
-### Planned for Future Milestones (Phase E)
-- ❌ Production hardening: request size limits, rate-limited push config, security regression tests
-- ❌ Final end-to-end verification and documentation pass
+### Planned for Future Milestones
+- ❌ PWA installability, offline capability, and queued alerts via IndexedDB
+- ❌ Production SMS/email provider verification and delivery-receipt webhooks
 
 ---
 
@@ -142,7 +145,8 @@ silent-sos_web_app/
 │   │   ├── email.test.js       # Email template, escaping & transport tests
 │   │   ├── webpush.test.js     # Push subscriptions, throttling & delivery tests
 │   │   ├── sms.test.js         # SMS content, normalization & transport tests
-│   │   └── notifications.test.js # Delivery receipts API & tenant isolation tests
+│   │   ├── notifications.test.js # Delivery receipts API & tenant isolation tests
+│   │   └── hardening.test.js   # Headers, payload limits & hardening regression tests
 │   ├── package.json
 │   └── .env.example
 ├── database/                   # Database Architecture (PostgreSQL + PostGIS)
@@ -247,3 +251,4 @@ npm test
 - **Security Headers & CORS**: Standard defense-in-depth headers applied via `helmet` and strict origin policies.
 - **Immutable Audit Trail**: Emergency events and transitions are preserved in `alert_events`.
 - **Local-Only Stealth PIN**: The stealth PIN is never transmitted; only its SHA-256 hash and length are stored in browser storage, and panic triggers record only a source label in the audit trail.
+- **Defense in Depth**: 64 KB request body caps, `no-store` API caching, rate-limited public endpoints, removed framework fingerprinting, and JSON errors that never expose stack traces outside development.
