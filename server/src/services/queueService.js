@@ -9,7 +9,7 @@
  */
 
 import { PgBoss } from 'pg-boss';
-import { query } from '../config/database.js';
+import { buildConnectionConfig, query } from '../config/database.js';
 import { getIO } from './socketService.js';
 import { getEmailStatus, sendAlertEmail } from './emailService.js';
 import { getSmsStatus, sendAlertSms } from './smsService.js';
@@ -34,11 +34,7 @@ let startPromise = null;
 
 function buildConnectionOptions() {
   return {
-    host: process.env.DATABASE_HOST || 'localhost',
-    port: parseInt(process.env.DATABASE_PORT, 10) || 5432,
-    database: process.env.DATABASE_NAME || 'silent_sos',
-    user: process.env.DATABASE_USER || 'postgres',
-    password: process.env.DATABASE_PASSWORD ?? process.env.PGPASSWORD ?? '',
+    ...buildConnectionConfig(),
     max: parseInt(process.env.QUEUE_POOL_MAX, 10) || 5,
   };
 }
